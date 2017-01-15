@@ -17,9 +17,9 @@ My rules are non-pythonic, and are applied to Python,C,Verilog,VHDL,Perl equally
 
 My Python does not "look" like others Python, but it does look like my Verilog,C,etc.
 
-Rule-1 : <TAB> is never to be used. Two space "  " indents only.
+Rule-1 : \<TAB> is never to be used. Two space "  " indents only.
 
-Rule-2 : All text lines are 80 columns wide maximum, including the <CR><LF>.
+Rule-2 : All text lines are 80 columns wide maximum, including the \<CR>\<LF>.
 
 Rule-3 : All instruction lines end in a ";" even though not required.
 
