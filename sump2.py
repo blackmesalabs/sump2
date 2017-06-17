@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # sump2
-#               Copyright (c) Kevin M. Hubbard 2016 BlackMesaLabs
+#               Copyright (c) Kevin M. Hubbard 2017 BlackMesaLabs
 #
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -114,6 +114,13 @@
 #       12.19.16 khubbard   Fork for Pi and icoboard from Windows original.
 #     2017.01.05 khubbard   Merge Win,Pi fork. bundle fix. Trigger enhancements
 #     2017.01.07 khubbard   Fixed Pi import SpiDev issues with 2017.01.05
+#     2017.03.09 khubbard   Arm without polling option added.
+#     2017.03.09 khubbard   Only allow single falling edge trigger.
+#     2017.03.09 khubbard   Replace 2D arrays from VCD export.     
+#     2017.03.14 khubbard   Added show/hide support to children of bundles.
+#     2017.04.19 khubbard   Keyboard macros and crop_to_ini added.
+#     2017.04.25 khubbard   startup and shutdown scripting.
+#     2017.06.08 khubbard   Added system command for calling external programs
 #
 # Web Location:
 #   Haven't established a GitHub for this project yet. Currently it resides at
@@ -135,7 +142,7 @@ class main(object):
  def __init__(self):
 # import math   # pow
 # import types  # type
-  self.vers = "2017.01.07";
+  self.vers = "2017.06.08";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -255,6 +262,7 @@ class main(object):
       print( "load_format() ", file_name );
       load_format( self, file_name ); 
       trig_i = sump_dump_data(self);
+      self.trig_i = trig_i;
       sump_vars_to_signal_attribs( self );# Populates things like trigger attr
 
 #   if os.path.exists( file_name ):
@@ -304,12 +312,22 @@ class main(object):
 
   self.pygame.mouse.set_cursor(*pygame.cursors.arrow);# Pi
 
+  file_startup = self.vars["sump_script_startup"];
+  import os.path
+  if ( os.path.isfile(file_startup) ):
+    rts = source_file( self, [file_startup] );
+    sump_vars_to_signal_attribs( self );# Update triggers, etc
+    self.name_surface_valid = False;
+    screen_refresh( self );
+
   # GUI Main Loop
   self.clock = self.pygame.time.Clock();
   self.time  = self.pygame.time;
   self.pygame.key.set_repeat(50,200);
   while ( self.done==False ):
     # When live, attempt to acquire data, else display static data (faster)
+    if ( self.acq_state=="arm_rle" or  self.acq_state=="arm_normal"):
+      draw_header( self,"Armed");
     if ( self.acq_state == "acquire_single" or
          "acquire_rle" in self.acq_state  or
          self.acq_state == "acquire_continuous" ):
@@ -328,6 +346,7 @@ class main(object):
           trig_i = sump_dump_data(self);
         else:
           trig_i = sump_dump_rle_data(self);
+        self.trig_i = trig_i;
         print("Trigger Index = %d " % trig_i );
 
         # Place the cursors by the trigger.
@@ -339,9 +358,13 @@ class main(object):
 #         each.sample = int( trigger_sample ) + offset;
           each.sample = int( trig_i ) + offset;
         self.curval_surface_valid = False;# curval surface invalid 
-
+ 
+#       print( self.acq_state );
         if ( self.acq_state == "acquire_continuous" ):
           sump_arm( self, True );
+#       elif ( self.acq_state=="arm_rle" or  self.acq_state=="arm_normal"):
+#         draw_header( self,"Armed");
+#         pass;
         else:
           self.acq_state = "acquire_stop";
           draw_header( self, "ACQUIRED");
@@ -364,6 +387,14 @@ class main(object):
 #         proc_cmd( self, "zoom_to", ["0", str( self.max_samples ) ] );
 #         proc_cmd( self, "zoom_to_cursors", [] );
           print("RENDERING-COMPLETE");
+
+          file_shutdown = self.vars["sump_script_shutdown"];
+          import os.path
+          if ( os.path.isfile(file_shutdown) ):
+            rts = source_file( self, [file_shutdown] );
+            sump_vars_to_signal_attribs( self );# Update triggers, etc
+            self.name_surface_valid = False;
+            screen_refresh( self );
 
       else:
 #       draw_header(self,"Waiting for trigger..");
@@ -416,6 +447,53 @@ class main(object):
         elif ( event.key == pygame.K_LEFT  ):
           num_samples = self.sample_room // 16;
           proc_cmd( self, "scroll_left", [str(num_samples)] );
+        elif ( event.key == pygame.K_F1  or
+               event.key == pygame.K_F2  or
+               event.key == pygame.K_F3  or
+               event.key == pygame.K_F4  or
+               event.key == pygame.K_F5  or
+               event.key == pygame.K_F6  or
+               event.key == pygame.K_F7  or
+               event.key == pygame.K_F8  or
+               event.key == pygame.K_F9  or
+               event.key == pygame.K_F10 or
+               event.key == pygame.K_F11 or
+               event.key == pygame.K_F12 or
+               event.key == pygame.K_1   or
+               event.key == pygame.K_2   or
+               event.key == pygame.K_3   or
+               event.key == pygame.K_4   or
+               event.key == pygame.K_5   or
+               event.key == pygame.K_6   or
+               event.key == pygame.K_7   or
+               event.key == pygame.K_8   or
+               event.key == pygame.K_9   or
+               event.key == pygame.K_0   
+             ):
+          if   ( event.key==pygame.K_1 ): cmd=( self.vars["sump_macro_1"]);
+          elif ( event.key==pygame.K_2 ): cmd=( self.vars["sump_macro_2"]);
+          elif ( event.key==pygame.K_3 ): cmd=( self.vars["sump_macro_3"]);
+          elif ( event.key==pygame.K_4 ): cmd=( self.vars["sump_macro_4"]);
+          elif ( event.key==pygame.K_5 ): cmd=( self.vars["sump_macro_5"]);
+          elif ( event.key==pygame.K_6 ): cmd=( self.vars["sump_macro_6"]);
+          elif ( event.key==pygame.K_7 ): cmd=( self.vars["sump_macro_7"]);
+          elif ( event.key==pygame.K_8 ): cmd=( self.vars["sump_macro_8"]);
+          elif ( event.key==pygame.K_9 ): cmd=( self.vars["sump_macro_9"]);
+          elif ( event.key==pygame.K_0 ): cmd=( self.vars["sump_macro_0"]);
+
+          if   ( event.key==pygame.K_F1 ): cmd=( self.vars["sump_macro_F1"]);
+          elif ( event.key==pygame.K_F2 ): cmd=( self.vars["sump_macro_F2"]);
+          elif ( event.key==pygame.K_F3 ): cmd=( self.vars["sump_macro_F3"]);
+          elif ( event.key==pygame.K_F4 ): cmd=( self.vars["sump_macro_F4"]);
+          elif ( event.key==pygame.K_F5 ): cmd=( self.vars["sump_macro_F5"]);
+          elif ( event.key==pygame.K_F6 ): cmd=( self.vars["sump_macro_F6"]);
+          elif ( event.key==pygame.K_F7 ): cmd=( self.vars["sump_macro_F7"]);
+          elif ( event.key==pygame.K_F8 ): cmd=( self.vars["sump_macro_F8"]);
+          elif ( event.key==pygame.K_F9 ): cmd=( self.vars["sump_macro_F9"]);
+          elif ( event.key==pygame.K_F10): cmd=( self.vars["sump_macro_F10"]);
+          elif ( event.key==pygame.K_F11): cmd=( self.vars["sump_macro_F11"]);
+          elif ( event.key==pygame.K_F12): cmd=( self.vars["sump_macro_F12"]);
+          proc_cmd( self, cmd.lower(), [] );
 
         # Up and Down arrows either Zoom In,Out or Scroll the Signal list
         elif ( event.key == pygame.K_UP    ):
@@ -686,7 +764,7 @@ class main(object):
           draw_popup_cmd( self );
           self.popup_sel = get_popup_sel( self );
           screen_flip( self ); # Place popup on top existing stuff, no erase
-          self.acq_state = "acquire_stop";# Stop any live acquisitions
+#         self.acq_state = "acquire_stop";# Stop any live acquisitions
 
 
 
@@ -1108,7 +1186,7 @@ def init_help( self ):
   a = [];
   a+=["#####################################################################"];
   a+=["# SUMP2 BlackMesaLabs  GNU GPL V2 Open Source License. Python 3.x   #"];
-  a+=["# (C) Copyright 2016 Kevin M. Hubbard - All rights reserved.        #"];
+  a+=["# (C) Copyright 2017 Kevin M. Hubbard - All rights reserved.        #"];
   a+=["#####################################################################"];
   a+=["# bd_shell Commands                                                 #"];
   a+=["#   env                : Display all assigned variables and values  #"];
@@ -1152,7 +1230,7 @@ def init_manual( self ):
   a = [];
   a+=["#####################################################################"];
   a+=["# SUMP2 by BlackMesaLabs  GNU GPL V2 Open Source License. Python 3.x "];
-  a+=["# (C) Copyright 2016 Kevin M. Hubbard - All rights reserved.         "];
+  a+=["# (C) Copyright 2017 Kevin M. Hubbard - All rights reserved.         "];
   a+=["#####################################################################"];
   a+=["1.0 Scope                                                            "];
   a+=[" This document describes the SUMP2 software and hardware.            "];
@@ -1360,6 +1438,31 @@ def init_vars( self, file_ini ):
   vars["cursor_unit"] = "clocks";
 # vars["cursor_unit"] = "samples";
   vars["cursor_mult"] = "1.0";
+  vars["sump_crop_pre_trig_len"]  = "00040000";
+  vars["sump_crop_post_trig_len"] = "00001000";
+  vars["sump_macro_1"]  = "Acquire_RLE";
+  vars["sump_macro_2"]  = "Acquire_Normal";
+  vars["sump_macro_3"]  = "Acquire_Stop";
+  vars["sump_macro_4"]  = "Quit";
+  vars["sump_macro_5"]  = "Crop_to_INI";
+  vars["sump_macro_6"]  = "Crop_to_Cursors";
+  vars["sump_macro_7"]  = "Save_PNG";
+  vars["sump_macro_8"]  = "Save_VCD";
+  vars["sump_macro_9"]  = "Zoom_to_Cursors";
+  vars["sump_macro_0"]  = "Cursors_to_View";
+
+  vars["sump_macro_F1"]  = "Acquire_RLE";
+  vars["sump_macro_F2"]  = "Acquire_Normal";
+  vars["sump_macro_F3"]  = "Acquire_Stop";
+  vars["sump_macro_F4"]  = "Quit";
+  vars["sump_macro_F5"]  = "Crop_to_INI";
+  vars["sump_macro_F6"]  = "Crop_to_Cursors";
+  vars["sump_macro_F7"]  = "Save_PNG";
+  vars["sump_macro_F8"]  = "Save_VCD";
+  vars["sump_macro_F9"]  = "Zoom_to_Cursors";
+  vars["sump_macro_F10"] = "Cursors_to_View";
+  vars["sump_macro_F11"] = "Cursor1_to_Here";
+  vars["sump_macro_F12"] = "Cursor2_to_Here";
 
   vars["bd_connection"         ] = "tcp";
   vars["bd_protocol"           ] = "poke";
@@ -1368,6 +1471,8 @@ def init_vars( self, file_ini ):
   vars["uut_name"              ] = "UUT";
 # vars["sump_addr"             ] = "00000090" ;# Addr of sump2_ctrl_reg
   vars["sump_addr"             ] = "00000010" ;# Addr of sump2_ctrl_reg
+  vars["sump_script_startup"   ] = "sump2_startup.txt";
+  vars["sump_script_shutdown"  ] = "sump2_shutdown.txt";
   vars["sump_script_inc_filter"] = "*.txt";
   vars["sump_script_exc_filter"] = "sump2_*.txt";
   vars["sump_trigger_type"     ] = "or_rising";
@@ -1376,8 +1481,8 @@ def init_vars( self, file_ini ):
   vars["sump_trigger_nth"      ] = "0001";
   vars["sump_acquisition_len"  ] = "44";
   vars["sump_rle_event_en"     ] = "FFFFFFFF";
-  vars["sump_rle_pre_trig_len" ] = "00100000";
-  vars["sump_rle_post_trig_len"] = "00100000";
+  vars["sump_rle_pre_trig_len" ] = "00010000";
+  vars["sump_rle_post_trig_len"] = "00010000";
   vars["sump_user_ctrl"        ] = "00000000";
   vars["sump_user_pattern0"    ] = "00000000";
   vars["sump_user_pattern1"    ] = "00000000";
@@ -1417,6 +1522,13 @@ def var_dump( self, file_ini ):
     txt_list.append( key + " = " + val + "\n" );
   for each in sorted( txt_list ):
     file_out.write( each );
+  file_out.close(); 
+  return;
+
+def hexlist2file( self, file_name, my_list ):
+  file_out  = open( file_name, 'w' );
+  for each in my_list:
+    file_out.write( "%08x\n" % each );
   file_out.close(); 
   return;
 
@@ -1750,6 +1862,24 @@ def proc_cmd( self, cmd, parms ):
   elif ( cmd == "source" ):
     rts = source_file( self, parms );
 
+  elif ( cmd == "system" ):
+    import os;
+    txt = "";
+    for each in parms:
+      if ( each != None ):
+        txt = txt + each + " ";
+    os.system( txt );
+
+  elif ( cmd == "gui_minimize" ):
+    self.pygame.display.iconify();
+#  elif ( cmd == "gui_maximize" ):
+#    self.screen_width  = int( self.vars["screen_width"], 10 );
+#    self.screen_height = int( self.vars["screen_height"], 10 );
+#    self.screen=pygame.display.set_mode(
+#       [ self.screen_width, self.screen_height ],
+#       pygame.RESIZABLE | pygame.HWSURFACE | pygame.DOUBLEBUF );
+
+
   elif ( cmd == "more" ):
     rts = more_file( self, parms );
 
@@ -1797,12 +1927,22 @@ def proc_cmd( self, cmd, parms ):
     self.vars["sump_acquisition_len"] = ( "%02x" % acq_len );
     print( "sump_acquisition_len = " + ( "%02x" % acq_len ));
 
+
+# HERE "Arm_Normal","Arm_RLE","Acquire_Download",],
+  elif ( cmd == "acquire_download" ):
+    if ( self.acq_state == "arm_normal" ):
+      self.acq_state = "acquire_single";
+    elif ( self.acq_state == "arm_rle" ):
+      self.acq_state = "acquire_rle";
+
   elif ( cmd == "sump_arm"           or
          cmd == "sump_arm_rle"       or
          cmd == "sump_stop"          or
          cmd == "acquire_single"     or
          cmd == "acquire_normal"     or
          cmd == "acquire_continuous" or
+         cmd == "arm_normal"         or
+         cmd == "arm_rle"            or
          "acquire_rle" in cmd        or     
          cmd == "acquire_stop"          ):
     if ( cmd == "sump_arm"           or
@@ -1810,9 +1950,12 @@ def proc_cmd( self, cmd, parms ):
          cmd == "acquire_single"     or
          cmd == "acquire_normal"     or
          cmd == "acquire_continuous" or
+         cmd == "arm_normal"         or
+         cmd == "arm_rle"            or
          "acquire_rle" in cmd            ): 
       sump_arm(self, True );# Arm the hardware
-      if ( "acquire_rle" in cmd ): 
+#     if ( "acquire_rle" in cmd ): 
+      if ( "rle" in cmd ): 
         self.acq_mode = "rle";
       else:
         self.acq_mode = "nonrle";
@@ -1837,6 +1980,7 @@ def proc_cmd( self, cmd, parms ):
           trig_i = sump_dump_data(self);# Grab data from hardware 
         else:
           trig_i = sump_dump_rle_data(self);# Grab data from hardware 
+        self.trig_i = trig_i;
 
   # Group of OS commands pwd,mkdir,cd,ls,cp,vi
   elif ( cmd == "pwd" ):
@@ -1915,8 +2059,8 @@ def proc_cmd( self, cmd, parms ):
 #   sump_dump_data(self);# Grab data from hardware ( might be in CLI Mode )
     filename_txt = make_unique_filename( self, "sump2_", ".txt" );
     filename_vcd = make_unique_filename( self, "sump2_", ".vcd" );
-    draw_popup_msg(self,
-                   ["NOTE:","Saving capture to VCD file "+filename_vcd],1);
+#   draw_popup_msg(self,
+#                  ["NOTE:","Saving capture to VCD file "+filename_vcd],1);
     sump_save_txt(self, filename_txt, mode_vcd = True );
     txt2vcd = TXT2VCD();# Instantiate Class for the VCD Conversion
     file_in = open( filename_txt, "r" );
@@ -1956,8 +2100,8 @@ def proc_cmd( self, cmd, parms ):
 #     sump_dump_rle_data(self);# Grab data from hardware 
     filename_txt = make_unique_filename( self, "sump2_rle_", ".txt" );
     filename_vcd = make_unique_filename( self, "sump2_rle_", ".vcd" );
-    draw_popup_msg(self,
-                   ["NOTE:","Saving capture to VCD file "+filename_vcd],1);
+#   draw_popup_msg(self,
+#                  ["NOTE:","Saving capture to VCD file "+filename_vcd],1);
     sump_save_txt(self, filename_txt, mode_vcd = True );
     txt2vcd = TXT2VCD();# Instantiate Class for the VCD Conversion
     file_in = open( filename_txt, "r" );
@@ -2028,6 +2172,7 @@ def proc_cmd( self, cmd, parms ):
     screen_flip( self );
     filename = make_unique_filename( self, "sump2_", ".jpg" );
     self.pygame.image.save( self.screen, filename );
+    print("save_jpg() : " + filename);
     draw_header( self,"save_jpg() : Saved " + filename );
     self.last_filesave = filename;
   elif ( cmd == "save_bmp" ):
@@ -2036,6 +2181,7 @@ def proc_cmd( self, cmd, parms ):
     screen_flip( self );
     filename = make_unique_filename( self, "sump2_", ".bmp" );
     self.pygame.image.save( self.screen, filename );
+    print("save_bmp() : " + filename);
     draw_header( self,"save_bmp() : Saved " + filename );
     self.last_filesave = filename;
   elif ( cmd == "save_png" ):
@@ -2045,6 +2191,7 @@ def proc_cmd( self, cmd, parms ):
     screen_flip( self );
     filename = make_unique_filename( self, "sump2_", ".png" );
     self.pygame.image.save( self.screen, filename );
+    print("save_png() : " + filename);
     draw_header( self,"save_png() : Saved " + filename );
     self.last_filesave = filename;
 
@@ -2272,6 +2419,15 @@ def proc_cmd( self, cmd, parms ):
       if ( sample_right > self.max_samples ): sample_right = self.max_samples;
       proc_cmd( self, "crop_to", [str(sample_left), str( sample_right ) ] );
 
+  elif ( cmd == "crop_to_ini" ):
+    trig_i = self.trig_i;	   
+    sample_left  = trig_i - int( self.vars["sump_crop_pre_trig_len" ],16 );
+    sample_right = trig_i + int( self.vars["sump_crop_post_trig_len" ],16 );
+
+    if ( sample_left  < 0                ): sample_left  = 0;
+    if ( sample_right > self.max_samples ): sample_right = self.max_samples;
+    proc_cmd( self, "crop_to", [str(sample_left), str( sample_right ) ] );
+
   elif ( cmd == "zoom_full" ):
     proc_cmd( self, "zoom_to", ["0", str( self.max_samples ) ] );
 
@@ -2480,6 +2636,23 @@ def proc_cmd( self, cmd, parms ):
     for sig_obj in self.signal_list:
       if ( sig_obj.selected == True or cmd == "hide_all" ):
         sig_obj.hidden = True;
+
+    # New 2017_03_14. If a group parent was hidden, hide children too
+    for sig_obj in self.signal_list:
+      if ( sig_obj.selected == True ):
+        found_jk = False;
+        hier_level = -1;   # Keeps track of group nesting
+        for ( i , sig_obj ) in enumerate( self.signal_list ):
+          if ( found_jk == True ):
+            if ( sig_obj.hier_level <= hier_level ):
+              found_jk = False;# Found the endgroup so done
+              break;
+            else:
+              sig_obj.hidden = True;# Hide the children
+          if ( sig_obj == self.sig_obj_sel ):
+            found_jk = True; # Found our specified parent
+            hier_level = sig_obj.hier_level;
+
     sump_signals_to_vars( self );# Update sump variables
     screen_refresh( self );
 
@@ -2490,6 +2663,24 @@ def proc_cmd( self, cmd, parms ):
       if ( sig_obj.selected == True or cmd == "show_all" ):
         sig_obj.hidden  = False;
         sig_obj.visible = True;
+    # New 2017_03_14. If a group parent was show, show children too
+    for sig_obj in self.signal_list:
+      if ( sig_obj.selected == True ):
+        found_jk = False;
+        hier_level = -1;   # Keeps track of group nesting
+        for ( i , sig_obj ) in enumerate( self.signal_list ):
+          if ( found_jk == True ):
+            if ( sig_obj.hier_level <= hier_level ):
+              found_jk = False;# Found the endgroup so done
+              break;
+            else:
+              sig_obj.hidden = False;# Show the children
+              sig_obj.visible = True;
+          if ( sig_obj == self.sig_obj_sel ):
+            found_jk = True; # Found our specified parent
+            hier_level = sig_obj.hier_level;
+
+
     sump_signals_to_vars( self );# Update sump variables
     screen_refresh( self );
 
@@ -2517,7 +2708,11 @@ def proc_cmd( self, cmd, parms ):
               self.vars["sump_trigger_type"] = "or_falling";
             if ( cmd == "trigger_watchdog" ):
               self.vars["sump_trigger_type"] = "watchdog";
-            if ( cmd != "trigger_remove"):
+
+            if ( cmd == "trigger_falling" ):
+              trig_field = 0x00000000 | ( 1<<i );# Only 1 Falling Trigger Works
+              self.vars["sump_trigger_field" ] = ("%08x" % ( trig_field) );
+            elif ( cmd != "trigger_remove"):
               trig_field = trig_field | ( 1<<i );
               self.vars["sump_trigger_field" ] = ("%08x" % ( trig_field) );
             else:	       
@@ -2943,8 +3138,8 @@ def draw_header( self, txt ):
   if ( self.fatal_msg != None ):
     uut_name = "Software DEMO Mode :";
     txt = uut_name + " " + self.fatal_msg;
-# msg ="SUMP2 " + self.vers + " (c) 2016 BlackMesaLabs : "+uut_name+" "+txt;
-  msg ="SUMP2 " + self.vers + " (c) 2016 BlackMesaLabs : "+txt;
+  msg ="SUMP2 " + self.vers + " (c) 2017 BlackMesaLabs : "+uut_name+" "+txt;
+# msg ="SUMP2 " + self.vers + " (c) 2017 BlackMesaLabs : "+txt;
   self.pygame.display.set_caption( msg );
 
   if ( self.os_sys == "Linux" ):
@@ -4437,11 +4632,13 @@ def sump_connect( self ):
     list_remove( self.popup_list_values, "Acquire_Normal");
     list_remove( self.popup_list_values, "Acquire_Single");
     list_remove( self.popup_list_values, "Acquire_Continuous");
+    list_remove( self.popup_list_values, "Arm_Normal");
 
   if ( self.sump.cfg_dict['rle_en'] == 0 ):
     self.popup_list_values.remove("Acquire_RLE_1x");
     self.popup_list_values.remove("Acquire_RLE_8x");
     self.popup_list_values.remove("Acquire_RLE_64x");
+    self.popup_list_values.remove("Arm_RLE");
 
   if ( self.sump.cfg_dict['trig_wd_en'] == 0 ):
     list_remove( self.popup_list_names, "Trigger_Watchdog");
@@ -4575,10 +4772,6 @@ def sump_save_txt( self, file_name, mode_vcd = False ):
   ram_len    = self.sump.cfg_dict['ram_len'];
   events = ram_bytes * 8;
 
-# if ( mode_vcd == True ):
-#   file_name = "sump_dump.txt4vcd";
-# else:
-#   file_name = "sump_dump.txt";
   file_out  = open( file_name, 'w' );
 
   if ( mode_vcd == False ):
@@ -4629,7 +4822,11 @@ def sump_save_txt( self, file_name, mode_vcd = False ):
           txt_str += " ";# Add whitespace between each dword
           if ( i == 0 ):
             name_str     += sig_obj.name + " ";
-            nickname_str += sig_obj.nickname + " ";
+#           nickname_str += sig_obj.nickname + " ";
+            nick = sig_obj.nickname;
+            nick = nick.replace( "[", "_" );# vcd2wlf fix for 2D arrays
+            nick = nick.replace( "]", "_" );# vcd2wlf fix for 2D arrays
+            nickname_str += nick + " ";
 #   print txt_str;# This line is a time sample for all signals
     if ( i == 0 ):
       freq_mhz = self.sump.cfg_dict['frequency'];
@@ -4795,8 +4992,8 @@ def sump_dump_rle_data( self ):
 # print("##");
 # print( rle_pre_trig_len );
 # print( rle_post_trig_len );
-
 # ram_len    = self.sump.cfg_dict['ram_len'];
+
   ( ram_pre, ram_post, ram_len, ram_phys ) = sump_ram_len_calc(self);
 
   events = ram_bytes * 8;# Example, 32 events total for 4 ram_bytes
@@ -4808,12 +5005,16 @@ def sump_dump_rle_data( self ):
   print("sump_dump_ram( rle_time )");
   rle_time = sump_dump_ram(self,rd_page = 0x3, rd_ptr = 0x0000 );
   rle_list = list(zip( rle_time, rle_data ));
+
 # print("Oy");
 # print( len(rle_time ) );
 # print( len(rle_data ) );
 # print( len(rle_list ) );
+
   print("process_rle()");
   (start_t,stop_t, pre_trig, post_trig ) = process_rle(self,rle_list);
+
+
 # print("start_time = %08x" % start_t );
 # print("stop_time  = %08x" % stop_t );
 # if ( ( stop_t - start_t ) > 0x00100000 ):
@@ -5142,6 +5343,8 @@ def sump_dump_var_ram( self, rd_page = 0 ):
   self.sump.wr( self.sump.cmd_wr_ram_page, rd_page );
   self.sump.wr( self.sump.cmd_wr_ram_ptr , ram_ptr );# Load at specfd pre-trig
   data = self.sump.rd( self.sump.cmd_rd_ram_data, num_dwords = ram_len );
+  name = "%02x" % rd_page;
+# hexlist2file( self, "sump_dump_var_ram_" + name + ".txt", data );
   return data;
 
 
@@ -5153,6 +5356,7 @@ def sump_dump_ram( self, rd_page = 0, rd_ptr = None ):
   if ( rd_ptr != None ):
     self.sump.wr( self.sump.cmd_wr_ram_ptr , rd_ptr );# 
   data = self.sump.rd( self.sump.cmd_rd_ram_data, num_dwords = ram_len );
+# hexlist2file( self, "sump_dump_ram.txt", data );
   return data;
 
 
@@ -5837,9 +6041,18 @@ def init_globals( self ):
 
     "--------",["Cursors",
                "Cursors_to_View","Cursor1_to_Here","Cursor2_to_Here",
-               "Crop_to_Cursors"],\
+               "Crop_to_Cursors","Crop_to_INI"],\
+
+#              ["Acquire",
+#              "Acquire_Normal","Acquire_RLE","Acquire_Stop",],
+
                ["Acquire",
-               "Acquire_Normal","Acquire_RLE","Acquire_Stop",],
+               "Acquire_Normal","Acquire_RLE",
+               "--------",
+               "Arm_Normal","Arm_RLE",
+               "--------",
+               "Acquire_Download","Acquire_Stop"],
+
 #              "Acquire_Single","Acquire_Continuous",
 #              "Acquire_RLE_1x","Acquire_RLE_8x","Acquire_RLE_64x",
 #              "Acquire_Stop",],
@@ -6067,7 +6280,6 @@ class TXT2VCD:
     next_perc = 0;# Display an update every 5%
     total_count = len( data_lines );
     prev_data_line = None;
-    # HERETODAY
     for ( i, data_line ) in enumerate( data_lines ):
       if ( data_line != prev_data_line ):
         rts += [ "#" + str(time) ]; 
