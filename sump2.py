@@ -121,6 +121,9 @@
 #     2017.04.19 khubbard   Keyboard macros and crop_to_ini added.
 #     2017.04.25 khubbard   startup and shutdown scripting.
 #     2017.06.08 khubbard   Added system command for calling external programs
+#     2017.09.13 khubbard   Fixed poor compression in conv_txt2vcd()
+#     2017.09.13 khubbard   Faster VCD by not iterating hidden sump_save_txt()
+#     2017.09.13 khubbard   Updated manual
 #
 # Web Location:
 #   Haven't established a GitHub for this project yet. Currently it resides at
@@ -142,7 +145,7 @@ class main(object):
  def __init__(self):
 # import math   # pow
 # import types  # type
-  self.vers = "2017.06.08";
+  self.vers = "2017.09.13";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -1253,19 +1256,23 @@ def init_manual( self ):
   a+=[" Zoom_Previous      : Return to previous zoom view.                  "];
   a+=[" Zoom_to_Cursors    : View region bound by cursors                   "];
   a+=[" Crop_to_Cursors    : Reduce sample set to region bound by cursors   "];
+  a+=[" Crop_to_INI        : Reduce sample set to region bound by INI file  "];
   a+=[" Cursors_to_View    : Bring both cursors into current view           "];
   a+=[" Cursor1_to_Here    : Bring Cursor1 to mouse pointer                 "];
   a+=[" Cursor2_to_Here    : Bring Cursor2 to mouse pointer                 "];
-  a+=[" Acquire_Single     : Arm hardware for single non-RLE acquisition    "];
+  a+=[" Acquire_Normal     : Arm for non-RLE acquisition and wait for trig  "];
+  a+=[" Acquire_RLE        : Arm for RLE acquisition and wait for trigger   "];
+  a+=[" Arm_Normal         : Arm for non-RLE acquisition.                   "];
+  a+=[" Arm_RLE            : Arm for RLE acquisition.                       "];
+  a+=[" Acquire_Download   : Download acquisition from Arm_Normal or Arm_RLE"];
+  a+=[" Acquire_Stop       : Abort an Arming                                "];
   a+=[" Acquire_Continuous : Arm hardware for looping non-RLE acquisitions  "];
   a+=[" Acquire_Stop       : Issue a stop to hardware from current Arming   "];
-  a+=[" Acquire_RLE_1x     : Arm hardware for RLE acquisition no decimation "];
-  a+=[" Acquire_RLE_8x     : Arm hardware for RLE acquisition 8x decimation "];
-  a+=[" Acquire_RLE_64x    : Arm hardware for RLE acquisition 64x decimation"];
   a+=[" File_Load          : Load a bd_shell script file                    "];
   a+=[" File_Save          : Save capture to a VCD,PNG,JPG, etc file        "];
   a+=[" Save_Rename        : Rename the last file saved                     "];
-  a+=[" Fonts              : Increase or Decrease GUI font size             "];
+  a+=[" Font_Larger        : Increase GUI font size                         "];
+  a+=[" Font_Smaller       : Decrease GUI font size                         "];
   a+=[" BD_SHELL           : Close GUI and open a BD_SHELL command line     "]; 
   a+=["                                                                     "];
   a+=[" Rename             : Rename a selected signal's nickname            "]; 
@@ -1339,9 +1346,6 @@ def init_manual( self ):
   a+=[" for both viewing and VCD generation.                                "];
   a+=["  crop_to_cursors : Permanently crops the number of samples to a     "];
   a+=["                    region indicated by the cursors.                 "];
-  a+=["  RLE Decimation  : 8x and 64x decimation specified at arming will   "];
-  a+=["                    acquire the RLE data and reduce the sample rate  "];
-  a+=["                    by 8x or 64x prior to rendering.                 "];
   a+=["  Signal Hiding   : Hiding a signal prior to acquisition will mask   "];
   a+=["                    the signal entirely and increase the overall RLE "];
   a+=["                    acquisition length. Hiding a signal post acquire "];
@@ -4784,6 +4788,13 @@ def sump_save_txt( self, file_name, mode_vcd = False ):
   percent = 0;
   percent_total = ((1.0)*self.max_samples );
   print("max_samples = " + str( self.max_samples ) );
+
+  # Speed things up by making a list of only the visible (non hidden) sig_objs
+  sig_vis_list = [];
+  for sig_obj in self.signal_list:
+    if ( sig_obj.hidden == False ):
+      sig_vis_list += [ sig_obj ];
+
   for i in range( 0, self.max_samples, 1):
     # This takes a while, so calculate and print percentage as it goes by
     if ( ((i*1.0) / percent_total) > percent ):
@@ -4795,9 +4806,13 @@ def sump_save_txt( self, file_name, mode_vcd = False ):
     m = 0;
     # Iterate the list searching for all the events in binary order
     for j in range( ram_bytes*8, 0, -1):
-      for sig_obj in self.signal_list:
+#     for sig_obj in self.signal_list:
+      for sig_obj in sig_vis_list:      
         if ( sig_obj.name == "event[%d]" % (j-1) and sig_obj.hidden == False ):
-          txt_str += sig_obj.values[i];
+          if ( i >= len( sig_obj.values )):
+            txt_str += "X";
+          else:
+            txt_str += sig_obj.values[i];
           m +=1;
           if ( m == 8 or ( m == 1 and mode_vcd == True ) ):
             txt_str += " ";# Add whitespace between each byte group
@@ -4813,7 +4828,8 @@ def sump_save_txt( self, file_name, mode_vcd = False ):
 
     # Iterate the list searching for all the dwords in order
     for j in range( 0, ram_dwords, 1 ):
-      for sig_obj in self.signal_list:
+#     for sig_obj in self.signal_list:
+      for sig_obj in sig_vis_list:      
         if ( sig_obj.name == "dword[%d]" % j and sig_obj.hidden == False ):
           if ( i >= len( sig_obj.values )):
             txt_str += "XXXXXXXX";
@@ -6263,7 +6279,6 @@ class TXT2VCD:
     return;
 
   def conv_txt2vcd ( self, main_self, txt_list ):
-# def conv_txt2vcd ( self, txt_list ):
     """
     Take in a txt list and spit out a vcd
     """
@@ -6280,14 +6295,26 @@ class TXT2VCD:
     next_perc = 0;# Display an update every 5%
     total_count = len( data_lines );
     prev_data_line = None;
+    prev_bit_value = None;
     for ( i, data_line ) in enumerate( data_lines ):
       if ( data_line != prev_data_line ):
         rts += [ "#" + str(time) ]; 
         bit_list = self.get_bit_value( data_line, header_line, bus_widths[:] );
-        rts += self.dump_bit_value( bit_list, self.char_code[:] );
+        new_bit_value = self.dump_bit_value( bit_list, self.char_code[:] );
+        final_bit_value = [];# Used for VCD delta compression
+        # Convert SUMP compression ( something changed, so here is everything ) to
+        # VCD compression ( only this signal changed since last clock )
+        # Go thru all the signals and only VCD store the ones that changed from prev
+        for ( j, ( each_bit, each_char_code ) ) in enumerate( new_bit_value ):
+          if ( prev_bit_value == None ):
+            final_bit_value += [ each_bit + each_char_code ];
+          else:	    
+            ( old_bit, old_char_code ) = prev_bit_value[j];
+            if ( old_bit != each_bit ):
+              final_bit_value += [ each_bit + each_char_code ];
+        rts += final_bit_value;	
+        prev_bit_value = new_bit_value;
         prev_data_line = data_line;
-
-#     prev_data_line = data_line;
       time += int( timescale );
 
       # TODO: Would be nice to have this call draw_header() instead.
@@ -6325,8 +6352,9 @@ class TXT2VCD:
     """
     rts = [];
     for bit in bit_list:
-      rts += [     bit +char_code_list_cp.pop(0) ];
-#     rts += [ str(bit)+char_code_list_cp.pop(0) ];
+      char_code = char_code_list_cp.pop(0);
+#     rts += [ bit + char_code ];
+      rts += [ (bit , char_code) ];
     return rts;
 
 
