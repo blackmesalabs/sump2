@@ -6,8 +6,7 @@
 # Description : A TCP Socket Server for Backdoor interfacing to hardware. 
 #               This provides a common software interface (TCP Sockets) for 
 #               executables and scripts to access Hardware without having 
-#               device driver access to USB or PCIe. This small script 
-#               interfaces either to a FTDI USB serial cable 
+#               device driver access to USB or PCIe. 
 # License     : GPLv3
 #      This program is free software: you can redistribute it and/or modify
 #      it under the terms of the GNU General Public License as published by
@@ -23,9 +22,9 @@
 #      along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #                                                               
 #       -------------             --------------            
-#      |             |           |              |<-pyserial-> USB Backoor
-#      |  User App   |<-sockets->| bd_server.py |  
-#      |exe or script|           |              |
+#      |             |           |              |       
+#      |  User App   |<-sockets->| bd_server.py |<-pyserialVCP-> USB Backdoor
+#      |exe or script|           |              |<-FTDI D3xx---> FT600 Backdoor
 #       -------------             --------------               
 #
 # PySerial for Python3 from:
@@ -52,17 +51,36 @@
 #   09.06.2016 : khubbard : Python 3.5 cast len(payload)/2 to int
 #   10.10.2016 : khubbard : 2nd PCIe driver added
 #   10.16.2016 : khubbard : "AUTO" option for usb_port for FTDI search.
+#   2017.12.19 : khubbard : Upgraded for USB3 FT600 support.           
 ###############################################################################
 import sys;
 import select;
 import socket;
 import time;
 import os;
+from time import sleep;
+
+#from SimpleXMLRPCServer import SimpleXMLRPCServer
+#from SimpleXMLRPCServer import SimpleXMLRPCRequestHandler
+
+# Restrict to a particular path.
+#class RequestHandler(SimpleXMLRPCRequestHandler):
+#  rpc_paths = ('/RPC2',)
+#def xmlrpc_function(x, y):
+#  status = 1+x+y;
+#  result = [5, 6, [4, 5]]
+#  return (status, result)
+# server = SimpleXMLRPCServer(( "157.226.13.36" , 8000),
+# server = SimpleXMLRPCServer(("localhost", 8000),
+# server = SimpleXMLRPCServer(("localhost", 21567),
+#                           requestHandler=RequestHandler);
+# server.register_function(xmlrpc_function);
+# server.serve_forever();
 
 
 def main():
   args = sys.argv + [None]*3;# Example "bd_server.ini"
-  vers          = "10.16.2016";
+  vers          = "2017.12.19";
   auth          = "khubbard";
   posted_writes = True;# USB Only - speeds up back2back writes 16x
 
@@ -75,7 +93,7 @@ def main():
   if ( ( os.path.exists( file_name ) ) == False ):
     ini_list =  ["bd_connection   = usb     # usb,pi_spi",
                  "bd_protocol     = mesa    # mesa,poke",
-                 "usb_port        = AUTO    # ie COM4",
+                 "usb_port        = AUTO    # ie COM4 FT600",
                  "tcp_port        = 21567   # ie 21567",
                  "baudrate        = 921600  # ie 921600",
                  "mesa_slot       = 00      # ie 00",
@@ -99,11 +117,13 @@ def main():
   # Assign ini_hash values to legacy variables. Error checking would be nice.
   tcp_log_en = False;
   bd_log_en  = False;
+  debug      = False;
   if ( ini_hash["debug_tcp_en"] == "1" ):
     tcp_log_en = True;
     tcp_log    = open ( 'bd_server_tcp_log.txt', 'w' );
   if ( ini_hash["debug_bd_en"] == "1" ):
     bd_log_en = True;
+    debug     = True;
     bd_log    = open ( 'bd_server_bd_log.txt', 'w' );
   bd_type      = ini_hash["bd_connection"].lower();
   bd_protocol  = ini_hash["bd_protocol"].lower();
@@ -137,12 +157,34 @@ def main():
   try:
     if ( True ):
       if ( bd_protocol == "poke" ):
+        # Old Way
         hw_bridge = Backdoor_Poke_UART( port_name=com_port, baudrate=baudrate,
                                         posted_writes=posted_writes );
+#     else:
+#       hw_bridge = Backdoor_Mesa_UART( port_name=com_port, baudrate=baudrate,
+#                                       slot=mesa_slot, subslot=mesa_subslot );
+#       com_port = hw_bridge.port_name;
+#
       else:
-        hw_bridge = Backdoor_Mesa_UART( port_name=com_port, baudrate=baudrate,
-                                        slot=mesa_slot, subslot=mesa_subslot );
-        com_port = hw_bridge.port_name;
+        # New interface stack for MesaBus over either FT600 or FT232 USB link
+        if ( com_port == "FT600" ):
+          usb_link = usb_ft600_link( debug = debug );# USB3 over a FT600 Chip
+          lf = "";
+          cfg = usb_link.get_cfg();
+          desired_freq = 1;# 1=66 MHz, 0=100 MHz
+          if ( cfg.FIFOClock != desired_freq ):
+            print("Changing FT600 Frequency");
+            cfg.FIFOClock = desired_freq;
+            rts = usb_link.set_cfg( cfg );
+            usb_link.close();
+            sleep(0.5);# Chip will reset, so must wait
+            usb_link = usb_ft600_link();
+        else:
+          usb_link = usb_ft232_link( port_name=com_port, baudrate=baudrate,
+                                     debug = debug );
+          lf = "\n";
+        mb  = mesa_bus( phy_link = usb_link, lf = lf, debug = debug );
+        hw_bridge = lb_link( mesa_bus=mb, slot=0x00, subslot=0x0,debug=debug);
 
     print(" [OK]   Connection to " + bd_type + " " + com_port+" established." );
   except:
@@ -156,12 +198,6 @@ def main():
   print("------------------------------------------------------------------" );
   print("Press Ctrl+Break to terminate.");      
 
-# server = SimpleXMLRPCServer(( "157.226.13.36" , 8000),
-# server = SimpleXMLRPCServer(("localhost", 8000),
-# server = SimpleXMLRPCServer(("localhost", 21567),
-#                           requestHandler=RequestHandler);
-# server.register_function(xmlrpc_function);
-# server.serve_forever();
 
 
 
@@ -305,7 +341,11 @@ def process_payload( bd, payload ):
       for each in data_list_str[:]:
         if ( each != None ):
           data_list.append( int( each, 16 ));
-      bd.wr_repeat( addr, data_list );
+      if ( False ):
+        for each in data_list:
+          bd.wr( addr, [each] );
+      else:
+        bd.wr_repeat( addr, data_list );
 
     # Read one or many dwords
     elif ( cmd_list[0] == "r" ):
@@ -325,10 +365,20 @@ def process_payload( bd, payload ):
     elif ( cmd_list[0] == "k" ):
       addr = ( int( cmd_list[1], 16) );
       data = ( int( cmd_list[2], 16) );# How many times to read N-1
-      if ( True ):
+      if ( False ):
+        rts = ""; k = 0;
+        while ( k <= data ):
+          data_list = bd.rd( addr, 0x1 );
+#         rts += "%08x" % data_list[0];
+          rts += "%08x " % data_list[0];# New 07_22_2016
+          k = k + 1;
+      else:
+#       print("%08x %08x" % ( addr, data ) );
         data_list = bd.rd_repeat( addr, data );
         rts = "";
         for each in data_list:
+#         rts += "%08x" % each;
+#       rts = rts.rstrip();
           rts += "%08x " % each;# New 07_22_2016
       rts = rts.rstrip();
 
@@ -371,9 +421,10 @@ def process_payload( bd, payload ):
       new_data = old_data[0] & ~bit;
       bd.wr( addr, [new_data] );
     
-    # Configure the S3 Hubbard board FPGA
+    # Configure the S3 Hubbard board FPGA over a FT232 USB link to cfg CPLD
     elif ( cmd_list[0] == "configure" ):
-      if ( isinstance( bd, Backdoor_Poke_UART ) ):# Vs PCIe
+      if ( isinstance( bd, Backdoor_Poke_UART ) or 
+           isinstance( bd, lb_link            )    ):
         file_name = cmd_list[1];
         bd.configure( file_name );
 
@@ -408,13 +459,403 @@ def process_payload( bd, payload ):
 
 
 ###############################################################################
+# vvvv New driver section supports both USB2 FT232 and USB3 FT600 links
+#  lb_link <-> mesa_bus <-> usb_*_link 
+#    * is either ft232 or ft600
+###############################################################################
+
+
+###############################################################################
+# Protocol interface for MesaBus over a FTDI USB3 connection.
+class lb_link:
+  def __init__ ( self, mesa_bus, slot, subslot, debug ):
+    self.mesa_bus  = mesa_bus;
+    self.slot      = slot;
+    self.subslot   = subslot;
+    self.debug     = debug;
+    self.phy_link  = mesa_bus.phy_link;
+
+  def wr_repeat(self, addr, data_list ):
+    self.wr( addr, data_list, repeat = True );
+
+  def wr(self, addr, data_list, repeat = False ):
+    # LocalBus WR cycle is a Addr+Data payload
+    # Mesabus has maximum payload of 255 bytes, or 63 DWORDs.
+    # 1 DWORD is LB Addr, leaving 62 DWORDs available for data bursts
+    # if data is more than 62 dwords, parse it down into multiple bursts
+    each_addr = addr;
+    if ( repeat == False ):
+      mb_cmd = 0x0;# Burst Write
+    else:
+      mb_cmd = 0x2;# Write Repeat ( Multiple data to same address - FIFO like )
+
+    # Warning: Payloads greater than 29 can result with corruptions on FT600,
+    # Example 0x11111111 becomes 0x1111111F.
+    #    1 DWORD of MesaBus Header
+    #    1 DWORD of LB Addr
+    #   30 DWORD of LB Data
+    #  ------
+    #   32 DWORDs = 128 Binary Bytes = 256 ASCII Nibbles = 512 FT600 Bytes
+    max_payload_len = 29;
+    while ( len( data_list ) > 0 ):
+      if ( len( data_list ) > max_payload_len ):
+        data_payload = data_list[0:max_payload_len];
+        data_list    = data_list[max_payload_len:];
+      else:
+        data_payload = data_list[0:];
+        data_list    = [];
+      payload = ( "%08x" % each_addr );
+      for each_data in data_payload:
+        payload += ( "%08x" % each_data );
+        if ( repeat == False ):
+          each_addr +=4;# maintain address for splitting into 62 DWORD bursts
+      if ( self.debug ):
+        print("LB.wr :" + payload );
+      self.mesa_bus.wr( self.slot, self.subslot, mb_cmd, payload );
+    return;
+
+  def wr_packet(self, addr_data_list ):
+    # FT600 has a 1024 byte limit. My 8bit interface halves that to 512 bytes
+    # and send ASCII instead of binary, so 256
+    max_packet_len = 30;
+    while ( len( addr_data_list ) > 0 ):
+      if ( len( addr_data_list ) > max_packet_len ):
+        data_payload   = addr_data_list[0:max_packet_len];
+        addr_data_list = addr_data_list[max_packet_len:];
+      else:
+        data_payload   = addr_data_list[0:];
+        addr_data_list = [];
+      payload = "";
+      for each_data in data_payload:
+        payload += ( "%08x" % each_data );
+      mb_cmd = 0x4;# Write Packet
+      if ( self.debug ):
+        print("LB.wr :" + payload );
+      self.mesa_bus.wr( self.slot, self.subslot, mb_cmd, payload );
+    return;
+
+  def rd_repeat(self, addr, num_dwords ):
+    rts = self.rd( addr, num_dwords+1, repeat = True );
+    return rts;
+
+  def rd(self, addr, num_dwords, repeat = False ):
+    max_payload = 31;
+    if ( num_dwords <= max_payload ):
+      rts = self.rd_raw( addr, num_dwords, repeat );
+    else:
+      # MesaBus has 63 DWORD payload limit, so split up into multiple reads
+      dwords_remaining = num_dwords;
+      rts = [];
+      while( dwords_remaining > 0 ):
+        if ( dwords_remaining <= max_payload ):
+          rts += self.rd_raw( addr, dwords_remaining, repeat );
+          dwords_remaining = 0;
+        else:
+          rts += self.rd_raw( addr, max_payload, repeat );
+          dwords_remaining -= max_payload;
+          if ( not repeat ):
+            addr += max_payload*4;# Note Byte Addressing
+    return rts;
+
+  def rd_raw(self, addr, num_dwords, repeat = False ):
+    dwords_remaining = num_dwords;
+    each_addr = addr;
+    if ( repeat == False ):
+      mb_cmd = 0x1;# Normal Read
+    else:
+      mb_cmd = 0x3;# Read  Repeat ( Multiple data to same address )
+
+    # LocalBus RD cycle is a Addr+Len 8byte payload to 0x00,0x0,0x1
+    payload = ( "%08x" % each_addr ) + ( "%08x" % num_dwords );
+    if ( self.debug ):
+      print("MB.wr :" + payload );
+    self.mesa_bus.wr( self.slot, self.subslot, mb_cmd, payload );
+    rts_str = self.mesa_bus.rd( num_dwords = num_dwords );
+    if ( self.debug ):
+      print("LB.rd :" + rts_str );
+
+    rts = [];
+    if ( len( rts_str ) >= 8 ):
+      while ( len( rts_str ) >= 8 ):
+        rts_dword = rts_str[0:8];
+        rts_str   = rts_str[8:];
+        if ( self.debug ):
+          print("MB.rd :" + rts_dword );
+        try:
+          rts += [ int( rts_dword, 16 ) ];
+        except:
+          addr_str = "%08x" % each_addr;
+          print("ERROR: Invalid LocalBus Read >" +
+                 addr_str + "< >" + rts_mesa + "< >" + rts_dword + "<");
+          if ( self.debug ):
+            sys.exit();
+          rts += [ 0xdeadbeef ];
+    else:
+      print("ERROR: Invalid LocalBus Read >" + rts_str + "<");
+      rts += [ 0xdeadbeef ];
+    return rts;
+
+
+  # This sends a locally referenced top.bit binary file to 
+  # S3 Hubbard Board FPGA for configuration over existing FT232 phy_link
+  def configure(self, file_name ):
+    print("bd.configure() " + file_name);
+#   try:
+    if ( True ):
+      if ( file_name[-2:] != "gz" ):
+        file_in = open ( file_name, 'rb' );# Read in binary top.bit file
+        while True:
+          packet = file_in.read( 4096 );   # 4K at a time
+          if packet:
+            self.phy_link.wr( packet, binary = True  );# send to serial port
+          else:
+            break;
+        file_in.close();
+      else:
+        import gzip;
+        file_in = open( file_name , 'rb' );
+        file_in_gz = gzip.GzipFile( fileobj= file_in,mode='rb' );
+        while True:
+          packet = file_in_gz.read( 4096 );   # 4K at a time
+          if packet:
+            self.phy_link.wr( packet, binary = True );# send to serial port
+          else:
+            break;
+        file_in_gz.close();
+        file_in.close();
+#     self.phy_link.ser.flushOutput();
+#     self.phy_link.ser.flushInput();
+      self.phy_link.wr("\n\n\n\nFFFFFFFF\n", binary = False);# Autobaud+Unlock
+
+#   except:
+#     print("bd.configure() FAILED!");
+    return;
+
+
+###############################################################################
+# Routines for Reading and Writing Payloads over MesaBus
+# A payload is a series of bytes in hexadecimal string format. A typical use
+# for MesaBus is to transport a higher level protocol like Local Bus for 32bit
+# writes and reads. MesaBus is lower level and transports payloads to a
+# specific device on a serial chained bus based on the Slot Number.
+# More info at : https://blackmesalabs.wordpress.com/2016/03/04/mesa-bus/
+#  0x0 : Write Cycle    : Payload of <ADDR><DATA>...
+#  0x1 : Read  Cycle    : Payload of <ADDR><Length>
+#  0x2 : Write Repeat   : Write burst data to single address : <ADDR><DATA>...
+#  0x3 : Read  Repeat   : Read burst data from single address : <ADDR><Length>
+#  0x4 : Write Multiple : Payload of <ADDR><DATA><ADDR><DATA><ADDR><DATA>..
+
+class mesa_bus:
+  def __init__ ( self, phy_link, lf, debug ):
+    self.phy_link = phy_link;
+# Note: type() doesn't work right in Python2, so tossed
+#    if ( type( phy_link ) == usb_ft232_link ):
+#      self.lf = "\n";
+#    else:
+#      self.lf = "";
+    self.debug = debug;
+    self.lf = lf;
+    self.phy_link.wr( self.lf );
+    self.phy_link.wr("FFFFFFFF" + self.lf );# HW releases Reset after 8 0xF
+
+  def wr( self, slot, subslot, cmd, payload ):
+#   preamble  = "F0";
+    preamble  = "FFF0";
+    slot      = "%02x" % slot;
+    subslot   = "%01x" % subslot;
+    cmd       = "%01x" % cmd;
+    num_bytes = "%02x" % int( len( payload ) / 2 );
+    mesa_str  = preamble + slot + subslot + cmd + num_bytes + payload+self.lf;
+    if ( self.debug ):
+      print( mesa_str );
+    self.phy_link.wr( mesa_str );
+    return;
+
+  def rd( self, num_dwords ):
+    #   "F0FE0004"+"12345678"
+    #   "04" is num payload bytes and "12345678" is the read payload
+    rts = self.phy_link.rd( bytes_to_read = (1+num_dwords)*4 );
+    if ( self.debug ):
+      print( rts );
+    if ( len( rts ) > 8 ):
+      rts = rts[8:];# Strip the "FOFE0004" header
+    return rts;
+
+
+###############################################################################
+# Serial port class for sending and receiving ASCII strings to FT232RL UART
+# Note - isn't ft232 specific, should work with any generic USB to UART chip
+class usb_ft232_link:
+  def __init__ ( self, port_name, baudrate, debug ):
+    self.debug = debug;
+    try:
+      import serial;
+    except:
+      raise RuntimeError("ERROR: PySerial from sourceforge.net is required");
+      raise RuntimeError(
+         "ERROR: Unable to import serial\n"+
+         "PySerial from sourceforge.net is required for Serial Port access.");
+    try:
+      self.ser = serial.Serial( port=port_name, baudrate=baudrate,
+                               bytesize=8, parity='N', stopbits=1,
+                               timeout=1, xonxoff=0, rtscts=0,dsrdtr=0);
+      self.port = port_name;
+      self.baud = baudrate;
+      self.ser.flushOutput();
+      self.ser.flushInput();
+      self.ack_state = True;
+    except:
+      raise RuntimeError("ERROR: Unable to open USB COM Port "+port_name)
+
+  def rd( self, bytes_to_read ):
+    rts = self.ser.readline();
+    if ( self.debug ):
+      print("FT232_RD:"+rts);
+    return rts;
+
+  def wr( self, str, binary = False ):
+    if ( binary ):
+      self.ser.write( str );
+    else:
+      self.ser.write( str.encode("utf-8") );
+      if ( self.debug ):
+        print("FT232_WR:"+str);
+    return;
+
+  def close(self):
+    self.ser.close();
+    return;
+
+
+###############################################################################
+# class for sending and receiving ASCII strings to FTDI FT600 chip
+# Note: Look at ftd3xx.py for list of functions in Python
+class usb_ft600_link:
+  def __init__ ( self, debug ):
+    self.debug = debug;
+    try:
+      import ftd3xx
+      import sys
+      if sys.platform == 'win32':
+        import ftd3xx._ftd3xx_win32 as _ft
+      elif sys.platform == 'linux2':
+        import ftd3xx._ftd3xx_linux as _ft
+    except:
+      raise RuntimeError("ERROR: FTD3XX from FTDIchip.com is required");
+    try:
+      # check connected devices
+      numDevices = ftd3xx.createDeviceInfoList()
+      if (numDevices == 0):
+        print("ERROR: No FTD3XX device is detected.");
+        return False;
+      # devList = ftd3xx.getDeviceInfoList();
+      devIndex = 0; # Assume a single device and open first device
+      self.D3XX = ftd3xx.create(devIndex, _ft.FT_OPEN_BY_INDEX);
+
+      if (self.D3XX is None):
+        print("ERROR: Please check if another D3XX application is open!");
+        return False;
+
+      # Reset the FT600 to make sure starting fresh with nothing in FIFOs
+      self.D3XX.resetDevicePort(); # Flush
+      self.D3XX.close();
+      self.D3XX = ftd3xx.create(devIndex, _ft.FT_OPEN_BY_INDEX);
+
+      # check if USB3 or USB2
+      devDesc = self.D3XX.getDeviceDescriptor();
+      bUSB3 = devDesc.bcdUSB >= 0x300;
+
+      # validate chip configuration
+      cfg = self.D3XX.getChipConfiguration();
+
+      # Timeout is in ms,0=Blocking. Defaults to 5,000
+      rts = self.D3XX.setPipeTimeout( pipeid = 0xFF, timeoutMS = 1000 );
+
+    # process loopback for all channels
+    except:
+      raise RuntimeError("ERROR: Unable to open USB Port " );
+    return;
+
+  def get_cfg( self ):
+    cfg = self.D3XX.getChipConfiguration();
+    return cfg;
+
+  def set_cfg( self, cfg ):
+    rts = self.D3XX.setChipConfiguration(cfg);
+    return rts;
+
+  def wr( self, str ):
+    if ( self.debug ):
+      print("FT600_WR:" +  str );
+    str = "~".join( str );# only using 8bits of 16bit FT600, so pad with ~
+    bytes_to_write = len( str );# str is now "~1~2~3 .. ~e~f" - Twice as long
+    channel = 0;
+    result = False;
+    timeout = 5;
+    tx_pipe = 0x02 + channel;
+    if sys.platform == 'linux2':
+      tx_pipe -= 0x02;
+    if ( sys.version_info.major == 3 ):
+      str = str.encode('latin1');
+    xferd = 0
+    while ( xferd != bytes_to_write ):
+      # write data to specified pipe
+      xferd += self.D3XX.writePipe(tx_pipe,str,bytes_to_write-xferd);
+    return;
+
+  def rd( self, bytes_to_read ):
+    bytes_to_read = bytes_to_read * 4;# Only using 8 of 16bit of FT600, ASCII
+    channel = 0;
+    rx_pipe = 0x82 + channel;
+    if sys.platform == 'linux2':
+      rx_pipe -= 0x82;
+    output = self.D3XX.readPipeEx( rx_pipe, bytes_to_read );
+    xferd = output['bytesTransferred']
+    if sys.version_info.major == 3:
+      buff_read = output['bytes'].decode('latin1');
+    else:
+      buff_read = output['bytes'];
+
+    while (xferd != bytes_to_read ):
+      status = self.D3XX.getLastError()
+      if (status != 0):
+        print("ERROR READ %d (%s)" % (status,self.D3XX.getStrError(status)));
+        if sys.platform == 'linux2':
+          return self.D3XX.flushPipe(pipe);
+        else:
+          return self.D3XX.abortPipe(pipe);
+      output = self.D3XX.readPipeEx( rx_pipe, bytes_to_read - xferd );
+      status = self.D3XX.getLastError()
+      xferd += output['bytesTransferred']
+      if sys.version_info.major == 3:
+        buff_read += output['bytes'].decode('latin1')
+      else:
+        buff_read += output['bytes']
+    if ( self.debug ):
+      print("FT600_RD:" +  buff_read[0::2] );
+    return buff_read[0::2];# Return every other ch as using 8 of 16 FT600 bits
+
+  def close(self):
+    self.D3XX.resetDevicePort(); # Flush anything in chip
+    self.D3XX.close();
+    self.D3XX = 0;
+    return;
+
+
+###############################################################################
+# vvvv Legacy pre-USB3 support stuff follows vvvv
+###############################################################################
+
+
+###############################################################################
+# LEGACY
 # Routines for Reading and Writing Payloads over MesaBus
 # A payload is a series of bytes in hexadecimal string format. A typical use
 # for MesaBus is to transport a higher level Local Bus protocol for 32bit
 # writes and reads. MesaBus is lower level and transports payloads to a
 # specific device on a serial chained bus based on the Slot Number.
 # More info at : https://blackmesalabs.wordpress.com/2016/03/04/mesa-bus/
-class mesa_bus:
+class legacy_mesa_bus:
   def __init__ ( self, port ):
     self.port = port;# See com_link.py
     self.port.wr("\n");# For autobaud
@@ -436,6 +877,7 @@ class mesa_bus:
 
 
 ###############################################################################
+# LEGACY
 # Serial port class for sending and receiving ASCII strings : MesaBus only
 class com_link:
   def __init__ ( self, port_name, baudrate ):
@@ -468,6 +910,7 @@ class com_link:
 
 
 ###############################################################################
+# LEGACY
 # Protocol interface for MesaBus over a UART PySerial connection.
 class Backdoor_Mesa_UART:
   def __init__ ( self, port_name, baudrate, slot, subslot ):
@@ -477,17 +920,28 @@ class Backdoor_Mesa_UART:
       port_list = serial.tools.list_ports.comports();
       # [('COM26','USB Serial Port (COM26)','FTDIBUS\\..'),
       #  ('COM4','USB Serial Port (COM4)','FTDIBUS\\...)]
+      # This is really strange, when running from command line, FTDIBUS shows
+      # up in the each[2] field. When double-clicking on bd_server.py it 
+      # does not. Solution is to search for "USB Serial Port" instead which
+      # appears to work well for both.
       found = None;
       for each in port_list:
-        # print( each );
-        if ( each[2] != 'n/a' ):
-          if ( "FTDIBUS" in each[2] ):
-            found = each[0];
-            # print( found );
+        if ( "USB Serial Port" in each[1] ):
+          found = each[0];
       port_name = found;
+#         print("FOUND " + found );
+#       print("----");
+#       print( each );
+#       print( each[0] );
+#       print( each[1] );
+#       print( each[2] );
+#       if ( each[2] != 'n/a' ):
+#         if ( "FTDIBUS" in each[2] ):
+#           found = each[0];
+#           print("FOUND " + found );
 
     self.com_link = com_link( port_name=port_name,baudrate=baudrate);
-    self.mesa_bus = mesa_bus( self.com_link);# Establish MesaBus link
+    self.mesa_bus = legacy_mesa_bus( self.com_link);# Establish MesaBus link
     self.slot      = slot;
     self.subslot   = subslot;
     self.dbg_flag  = False;
