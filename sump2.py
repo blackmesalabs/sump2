@@ -90,56 +90,57 @@
 #          conversion doesnt work unless there is a value change every sample
 # NOTE: Pygame stops responding if window is dragged onto second monitor.
 # TODO: Doesn't support SUMP list reordering or wave.txt order.
-#       09.05.16 khubbard   Fix for VCD exporting nicknames. GUI crash fixes.
-#       09.06.16 khubbard   Partial ported from Python 2.7 to 3.5. Incomplete.
-#       09.18.16 khubbard   Major performance improvements. GUI file loading  
-#       09.19.16 khubbard   Adjust DWORDs in RLE for trig_delay value         
-#       09.20.16 khubbard   RLE Undersample 4x-64x feature added. Popup change.
-#       09.23.16 khubbard   Popup Entry for variable changes in GUI added.
-#       09.24.16 khubbard   User Interface and performance usability improvmnts
-#       09.25.16 khubbard   GUI popup for signal rename.
-#       09.26.16 khubbard   Fixed opening VCD files for static offline viewing.
-#       09.26.16 khubbard   zoom_out capped at max_samples. RLE->VCD working
-#       09.29.16 khubbard   cursor_snap back in for single click op. VCD 'x'
-#       10.04.16 khubbard   fast_render added. Disable 4x prerender on >1000
-#       10.06.16 khubbard   Fixed popup bugs. sump_bundle_data() feature added
-#       10.16.16 khubbard   RLE culling null sample improvements. Menu changes.
-#       10.17.16 khubbard   fixed vcdfile2signal_list() not decompressing.
-#       10.18.16 khubbard   fixed menu. New function list_remove
-#       10.19.16 khubbard   RLE Event to DWORD alignment fix. Needs HW too.
-#       10.20.16 khubbard   Improve centering to trigger post acquisition. 
-#       10.21.16 khubbard   Acquisition_Length fixed. Also works with RLE now.
-#       10.24.16 khubbard   Fixed RLE cropping not showing DWORDs.Speed Improvs
-#       10.26.16 khubbard   TCP change to send full DWORDs with leading 0s
-#       12.19.16 khubbard   Fork for Pi and icoboard from Windows original.
-#     2017.01.05 khubbard   Merge Win,Pi fork. bundle fix. Trigger enhancements
-#     2017.01.07 khubbard   Fixed Pi import SpiDev issues with 2017.01.05
-#     2017.03.09 khubbard   Arm without polling option added.
-#     2017.03.09 khubbard   Only allow single falling edge trigger.
-#     2017.03.09 khubbard   Replace 2D arrays from VCD export.     
-#     2017.03.14 khubbard   Added show/hide support to children of bundles.
-#     2017.04.19 khubbard   Keyboard macros and crop_to_ini added.
-#     2017.04.25 khubbard   startup and shutdown scripting.
-#     2017.06.08 khubbard   Added system command for calling external programs
-#     2017.09.13 khubbard   Fixed poor compression in conv_txt2vcd()
-#     2017.09.13 khubbard   Faster VCD by not iterating hidden sump_save_txt()
-#     2017.09.13 khubbard   Updated manual
-#     2017.09.22 khubbard   Fixed zoom_out bug. Rendering performance increase.
-#     2017.09.22 khubbard   trigger_remove_all added. rle_autocull added.
-#     2017.09.22 khubbard   rle_autocull added. rle_gap_remove added.
-#     2017.09.23 khubbard   Convrtd sig values from "1" to True.1/2 DRAM needed
-#     2017.09.23 khubbard   RLE_LOSSY fully implemented. 10x speedup for 2M pts
-#     2017.09.23 khubbard   Smart time cursors scales between ns,us and ms 
-#     2017.09.25 khubbard   Time units displayed for windows.
-#     2017.09.25 khubbard   Fixed fast rendering of static signals.
-#     2017.09.26 khubbard   Improved cursor operations.
-#     2017.09.27 khubbard   rle_gap_replace added.      
-#     2017.09.30 khubbard   Fix RLE_LOSSY bug to pad enough samples for DWORDs
-#     2017.09.30 khubbard   Fix rle_autocull bug tossing too many samples
-#     2017.10.01 khubbard   Fix rle_autocull post trigger bug            
-#     2017.10.05 khubbard   list_view added
-#     2017.10.05 khubbard   dont load startup file if no hardware ( ie VCD )
-#     2017.10.06 khubbard   VCD gen 10x faster, bundles and load_vcd added.
+#   09.05.16 khubbard   Fix for VCD exporting nicknames. GUI crash fixes.
+#   09.06.16 khubbard   Partial ported from Python 2.7 to 3.5. Incomplete.
+#   09.18.16 khubbard   Major performance improvements. GUI file loading  
+#   09.19.16 khubbard   Adjust DWORDs in RLE for trig_delay value         
+#   09.20.16 khubbard   RLE Undersample 4x-64x feature added. Popup change.
+#   09.23.16 khubbard   Popup Entry for variable changes in GUI added.
+#   09.24.16 khubbard   User Interface and performance usability improvmnts
+#   09.25.16 khubbard   GUI popup for signal rename.
+#   09.26.16 khubbard   Fixed opening VCD files for static offline viewing.
+#   09.26.16 khubbard   zoom_out capped at max_samples. RLE->VCD working
+#   09.29.16 khubbard   cursor_snap back in for single click op. VCD 'x'
+#   10.04.16 khubbard   fast_render added. Disable 4x prerender on >1000
+#   10.06.16 khubbard   Fixed popup bugs. sump_bundle_data() feature added
+#   10.16.16 khubbard   RLE culling null sample improvements. Menu changes.
+#   10.17.16 khubbard   fixed vcdfile2signal_list() not decompressing.
+#   10.18.16 khubbard   fixed menu. New function list_remove
+#   10.19.16 khubbard   RLE Event to DWORD alignment fix. Needs HW too.
+#   10.20.16 khubbard   Improve centering to trigger post acquisition. 
+#   10.21.16 khubbard   Acquisition_Length fixed. Also works with RLE now.
+#   10.24.16 khubbard   Fixed RLE cropping not showing DWORDs.Speed Improvs
+#   10.26.16 khubbard   TCP change to send full DWORDs with leading 0s
+#   12.19.16 khubbard   Fork for Pi and icoboard from Windows original.
+# 2017.01.05 khubbard   Merge Win,Pi fork. bundle fix. Trigger enhancements
+# 2017.01.07 khubbard   Fixed Pi import SpiDev issues with 2017.01.05
+# 2017.03.09 khubbard   Arm without polling option added.
+# 2017.03.09 khubbard   Only allow single falling edge trigger.
+# 2017.03.09 khubbard   Replace 2D arrays from VCD export.     
+# 2017.03.14 khubbard   Added show/hide support to children of bundles.
+# 2017.04.19 khubbard   Keyboard macros and crop_to_ini added.
+# 2017.04.25 khubbard   startup and shutdown scripting.
+# 2017.06.08 khubbard   Added system command for calling external programs
+# 2017.09.13 khubbard   Fixed poor compression in conv_txt2vcd()
+# 2017.09.13 khubbard   Faster VCD by not iterating hidden sump_save_txt()
+# 2017.09.13 khubbard   Updated manual
+# 2017.09.22 khubbard   Fixed zoom_out bug. Rendering performance increase.
+# 2017.09.22 khubbard   trigger_remove_all added. rle_autocull added.
+# 2017.09.22 khubbard   rle_autocull added. rle_gap_remove added.
+# 2017.09.23 khubbard   Convrtd sig values from "1" to True.1/2 DRAM needed
+# 2017.09.23 khubbard   RLE_LOSSY fully implemented. 10x speedup for 2M pts
+# 2017.09.23 khubbard   Smart time cursors scales between ns,us and ms 
+# 2017.09.25 khubbard   Time units displayed for windows.
+# 2017.09.25 khubbard   Fixed fast rendering of static signals.
+# 2017.09.26 khubbard   Improved cursor operations.
+# 2017.09.27 khubbard   rle_gap_replace added.      
+# 2017.09.30 khubbard   Fix RLE_LOSSY bug to pad enough samples for DWORDs
+# 2017.09.30 khubbard   Fix rle_autocull bug tossing too many samples
+# 2017.10.01 khubbard   Fix rle_autocull post trigger bug            
+# 2017.10.05 khubbard   list_view added
+# 2017.10.05 khubbard   dont load startup file if no hardware ( ie VCD )
+# 2017.10.06 khubbard   VCD gen 10x faster, bundles and load_vcd added.
+# 2018.02.28 khubbard   Line-6295 Read in VCD 'x','z' as 0. reload_vcd added
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -161,7 +162,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2017.10.06";
+  self.vers = "2018.02.28";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -645,7 +646,7 @@ class main(object):
           # Make sure the region doesnt wander, so calc from mouse press
           self.mouse_region = get_mouse_region(self,
                       self.mouse_btn1dn_x, self.mouse_btn1dn_y );
-#         print( self.mouse_region );# HERE
+#         print( self.mouse_region );
           if   ( self.mouse_region == "cursor" ):
             mouse_event_move_cursor( self );      # Move a cursor
           elif ( self.mouse_region == "slider" ):
@@ -1043,7 +1044,6 @@ def mouse_event_move_cursor( self ):
   # Determine which cursor is closest to mouse click and move that one.
   # If the cursors are close to each other, use Y location of mouse to 
   # determine which cursor the user is pointing to, else use closest X.
-  # HERE
   c1_y = self.cursor_list[0].y;
   c2_y = self.cursor_list[1].y;
   c1_x = self.cursor_list[0].x;
@@ -1182,7 +1182,6 @@ def get_mouse_region( self, mouse_x, mouse_y ):
   if ( mouse_x > self.sig_value_start_x and
        mouse_x < self.sig_value_stop_x  and
 #      mouse_y > self.cursor_start_y    and 
-# HERE
 #      mouse_y > self.sig_value_stop_y+self.txt_height and
        mouse_y < self.cursor_stop_y+self.txt_height    ):
     return "cursor";
@@ -1362,6 +1361,7 @@ def init_manual( self ):
   a+=[" Acquire_Stop       : Abort an Arming                                "];
   a+=[" Acquire_Continuous : Arm hardware for looping non-RLE acquisitions  "];
   a+=[" Load_VCD           : View the specified VCD file                    "];
+  a+=[" Reload_VCD         : Reload the currently loaded VCD file           "];
   a+=[" Save_VCD_Full      : Save entire acquisition to VCD file            "];
   a+=[" Save_VCD_Cursors   : Save Cursor Region to VCD file                 "];
   a+=[" List_View          : View selected signals in a text file           "];
@@ -1554,7 +1554,7 @@ def init_vars( self, file_ini ):
   vars["sump_macro_5"]  = "Crop_to_INI";
   vars["sump_macro_6"]  = "Crop_to_Cursors";
   vars["sump_macro_7"]  = "Save_PNG";
-  vars["sump_macro_8"]  = "Save_VCD";
+  vars["sump_macro_8"]  = "Reload_VCD";
   vars["sump_macro_9"]  = "Zoom_to_Cursors";
   vars["sump_macro_0"]  = "Cursors_to_View";
 
@@ -1565,7 +1565,7 @@ def init_vars( self, file_ini ):
   vars["sump_macro_F5"]  = "Crop_to_INI";
   vars["sump_macro_F6"]  = "Crop_to_Cursors";
   vars["sump_macro_F7"]  = "Save_PNG";
-  vars["sump_macro_F8"]  = "Save_VCD";
+  vars["sump_macro_F8"]  = "Reload_VCD";
   vars["sump_macro_F9"]  = "Zoom_to_Cursors";
   vars["sump_macro_F10"] = "Cursors_to_View";
   vars["sump_macro_F11"] = "Cursor1_to_Here";
@@ -1988,6 +1988,9 @@ def proc_cmd( self, cmd, parms ):
 
   elif ( cmd == "load_vcd" ):
     rts = load_vcd( self, parms );
+
+  elif ( cmd == "reload_vcd" ):
+    rts = load_vcd( self, [self.vcd_name] );
 
   elif ( cmd == "system" ):
     import os;
@@ -3487,7 +3490,6 @@ def draw_popup_box( self, x1,y1, txt_list ):
   h = len ( txt_list ) * self.txt_height + ( self.txt_height );
   w = w + ( self.txt_height//2 );
 
-  # HERE : Abort if there isn't enough room
 # if ( ( x1 + w ) > self.screen_width ):
 #   x1 -= w;
 #   return False;
@@ -3647,7 +3649,7 @@ def draw_screen( self ):
 # v_scale = 1.10;# This provides a proportional gap between text lines
   v_scale = 1.25;# This provides a proportional gap between text lines
 # bot_region_h = 5;
-  bot_region_h = 6;# HERE
+  bot_region_h = 6;
   self.sig_name_stop_y = screen_h - ( bot_region_h * self.txt_height );
   self.sig_value_stop_y = self.sig_name_stop_y;
 
@@ -4046,6 +4048,7 @@ def draw_screen( self ):
 #                                       (x2,y2),1);
 #             elif ( sig_obj.format != "bin" or fast_render == False ):
               else:
+#               print( sig_obj.name );# HERE
                 (last_trans_x,last_width) = draw_sample( self, surface, \
                     val,val_last,last_trans_x,last_width, \
                     sig_obj.format,format_bin, x,y);
@@ -4256,7 +4259,6 @@ def draw_screen( self ):
     self.screen.blit(txt, ( x, y ) );
 
   # 5 1/2 Draw Time scales ie "500.5us of 2.4ms" above the sample range
-  # HERE
   time_width_ns_list  = [];
   time_width_ns_list += [ float( self.sample_room ) * float( c_mult ) ];
   time_width_ns_list += [ float( self.max_samples ) * float( c_mult ) ];
@@ -5112,7 +5114,6 @@ def sump_save_txt( self, file_name, mode_vcd=False, mode_list=False,cmd=None ):
       sig_vis_list += [ sig_obj ];
 
 
-# HERE05
   # For list view, only save the selected signals
   if ( mode_list ):
     old_vis_list = sig_vis_list[:];
@@ -5429,7 +5430,6 @@ def sump_dump_rle_data( self ):
   print("process_rle()");
   (start_t,stop_t, pre_trig, post_trig ) = process_rle(self,rle_list);
 
-  # HERE30
   # It is possible for the RLE samples to be culled shorter than the DWORD
   # window. Check for that case and pad the RLE data in order to fit DWORDs
   if ( ram_dwords != 0 ):
@@ -6285,6 +6285,7 @@ def vcdfile2signal_list( self, file_name ):
           sample_cnt += 1;# Count Total Samples for final report at end
         time_now += sample_period;
 
+# HERE
    # Read the symbols new value and assign to last_value
     else:
       if ( words[0][0:1]=="0" or
@@ -6294,7 +6295,11 @@ def vcdfile2signal_list( self, file_name ):
         value = words[0];
       elif ( words[0][0:1] == "b" ):
         try:
-          value = int( words[0][1:],2 );# Convert Binary String to Integer
+#         value = int( words[0][1:],2 );# Convert Binary String to Integer
+          if ( words[0][1:] == "x" or words[0][1:] == "z" ):
+            value = 0;
+          else:
+            value = int( words[0][1:],2 );# Convert Binary String to Integer
           if ( symb != None ):
             num_bits = hash_dict_bits[ symb ];
             num_nibs = int(num_bits/4.00 + 0.75 );# ie 29 bits gets 8 nibbles
@@ -6336,7 +6341,8 @@ def vcdfile2signal_list( self, file_name ):
           last_value = int( my2_each.last_value, 16 );
         except:
           last_value = 0;
-        if   ( value == "0" ):
+#       if   ( value == "0" ):
+        if   ( value == "0" or value == "z" or value == "x" ):
           last_value = last_value & ~ my_each.bit_weight;
         elif ( value == "1" ):
           last_value = last_value |   my_each.bit_weight;
@@ -6522,7 +6528,7 @@ def init_globals( self ):
 
   # Create a list of files to source in menu given include and exclude filters
   file_inc_filter = "*.vcd";
-  vcd_load_list = ["VCD_Load"];
+  vcd_load_list = ["VCD_Load", "Reload_VCD"];
   import glob;
   glob_list = set(glob.glob(file_inc_filter));
   for each in glob_list:
