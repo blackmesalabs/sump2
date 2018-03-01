@@ -141,6 +141,7 @@
 # 2017.10.05 khubbard   dont load startup file if no hardware ( ie VCD )
 # 2017.10.06 khubbard   VCD gen 10x faster, bundles and load_vcd added.
 # 2018.02.28 khubbard   Line-6295 Read in VCD 'x','z' as 0. reload_vcd added
+# 2018.03.01 khubbard   os_platform added to separate RaspPi from Linux desktop
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -162,7 +163,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2018.02.28";
+  self.vers = "2018.03.01";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -463,7 +464,8 @@ class main(object):
 
     for event in pygame.event.get(): # User did something
       # VIDEORESIZE
-      if ( self.os_sys != "Linux" ):
+#     if ( self.os_sys != "Linux" ):
+      if ( self.os_platform != "rpi" ):
         if event.type == pygame.VIDEORESIZE:
           self.screen= pygame.display.set_mode(event.dict['size'], 
                               pygame.RESIZABLE | 
@@ -858,7 +860,8 @@ def display_init( self ):
   log( self, ["display_init()"] );
   import pygame # Import PyGame Module
   pygame.init() # Initialize the game engine
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     ( self.screen_width, self.screen_height ) = \
       (pygame.display.Info().current_w, pygame.display.Info().current_h);
     print( self.screen_width );
@@ -1279,7 +1282,7 @@ def init_help( self ):
   a = [];
   a+=["#####################################################################"];
   a+=["# SUMP2 BlackMesaLabs  GNU GPL V2 Open Source License. Python 3.x   #"];
-  a+=["# (C) Copyright 2017 Kevin M. Hubbard - All rights reserved.        #"];
+  a+=["# (C) Copyright 2018 Kevin M. Hubbard - All rights reserved.        #"];
   a+=["#####################################################################"];
   a+=["# bd_shell Commands                                                 #"];
   a+=["#   env                : Display all assigned variables and values  #"];
@@ -1323,7 +1326,7 @@ def init_manual( self ):
   a = [];
   a+=["#####################################################################"];
   a+=["# SUMP2 by BlackMesaLabs  GNU GPL V2 Open Source License. Python 3.x "];
-  a+=["# (C) Copyright 2017 Kevin M. Hubbard - All rights reserved.         "];
+  a+=["# (C) Copyright 2018 Kevin M. Hubbard - All rights reserved.         "];
   a+=["#####################################################################"];
   a+=["1.0 Scope                                                            "];
   a+=[" This document describes the SUMP2 software and hardware.            "];
@@ -3324,11 +3327,12 @@ def draw_header( self, txt ):
   if ( self.fatal_msg != None ):
     uut_name = "Software DEMO Mode :";
     txt = uut_name + " " + self.fatal_msg;
-  msg ="SUMP2 " + self.vers + " (c) 2017 BlackMesaLabs : "+uut_name+" "+txt;
+  msg ="SUMP2 " + self.vers + " (c) 2018 BlackMesaLabs : "+uut_name+" "+txt;
 # msg ="SUMP2 " + self.vers + " (c) 2017 BlackMesaLabs : "+txt;
   self.pygame.display.set_caption( msg );
 
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     # Pi display header at top of surface since full screen
     msg += "                    ";# Erase old text that was wider
     txt = self.font.render( msg , True, self.color_fg, self.color_bg );
@@ -3557,7 +3561,8 @@ def get_popup_sel( self ):
 # Find a monospaced font to use
 def get_font( self , font_name, font_height ):
   log( self, ["get_font() " + font_name ] );
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     # Pi Specific
     font_size = int(font_height);
     font = self.pygame.font.Font('freesansbold.ttf', font_size );
@@ -3655,7 +3660,8 @@ def draw_screen( self ):
 
   # 1st Display the Net Names
 # y = self.txt_height / 2; # Gap from top border
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     y = self.txt_height * 2; # Pi top header
   else:
     y = self.txt_height // 2; # Gap from top border
@@ -4887,7 +4893,8 @@ def list_remove( my_list, item ):
 # Establish connection to Sump2 hardware
 def sump_connect( self ):
   log( self, ["sump_connect()"] );
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     import spidev;# SPI Interface Module for Pi
     self.spi_port = spidev.SpiDev();
     self.spi_port.open(0,1);# Note: icoboard uses CE0 for Mach, CE1 for Ice
@@ -6410,6 +6417,13 @@ def init_globals( self ):
 
   import platform,os;
   self.os_sys = platform.system();  # Windows vs Linux
+
+  try:
+    import RPi.GPIO as gpio;
+    self.os_platform ="rpi";# This must be a RaspberryPi
+  except ImportError:
+    self.os_platform ="pc";# Assume a PC
+
   self.fatal_msg = None;
 
   self.undersample_data = False;
@@ -6597,7 +6611,8 @@ def init_globals( self ):
                "Cursors_to_View","Cursor1_to_Here","Cursor2_to_Here",
                "Crop_to_Cursors","Crop_to_INI"],];
 
-  if ( self.os_sys != "Linux" ):
+# if ( self.os_sys != "Linux" ):
+  if ( self.os_platform != "rpi" ):
     self.popup_list_values+=[["List_View",
                               "List_View_Cursors","List_View_Full"]];# Win
 
@@ -6642,7 +6657,8 @@ def init_globals( self ):
                ];
 #              "Quit"];
 #              ["System","Quit","Shutdown","Reboot","Load_FPGA"]];# Pi
-  if ( self.os_sys == "Linux" ):
+# if ( self.os_sys == "Linux" ):
+  if ( self.os_platform == "rpi" ):
     self.popup_list_values+=[["Misc","Font_Larger","Font_Smaller"]];
     self.popup_list_values+=[["System","Quit","Shutdown","Reboot","Load_FPGA"]];
   else:
@@ -7178,7 +7194,8 @@ class mesa_bus:
     num_bytes = "%02x" % ( len( payload ) / 2 );
     mesa_str  = preamble + slot + subslot + cmd + num_bytes + payload;
 #   if ( type( self.port ) == spidev.SpiDev ):
-    if ( self.os_sys == "Linux" ):
+#   if ( self.os_sys == "Linux" ):
+    if ( self.os_platform == "rpi" ):
       mesa_hex_list = [];
       for i in range( 0, len(mesa_str)/2 ):
         mesa_hex = int(mesa_str[i*2:i*2+2],16);
@@ -7190,7 +7207,8 @@ class mesa_bus:
 
   def rd( self ):
 #   if ( type( self.port ) == spidev.SpiDev ):
-    if ( self.os_sys == "Linux" ):
+#   if ( self.os_sys == "Linux" ):
+    if ( self.os_platform == "rpi" ):
       hex_str = "";
       rts = self.port.xfer2(8*[0xFF]);
       for each in rts:
