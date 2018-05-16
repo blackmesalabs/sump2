@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # sump2
-#               Copyright (c) Kevin M. Hubbard 2017 BlackMesaLabs
+#               Copyright (c) 2018 Kevin M. Hubbard BlackMesaLabs
 #
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -142,6 +142,12 @@
 # 2017.10.06 khubbard   VCD gen 10x faster, bundles and load_vcd added.
 # 2018.02.28 khubbard   Line-6295 Read in VCD 'x','z' as 0. reload_vcd added
 # 2018.03.01 khubbard   os_platform added to separate RaspPi from Linux desktop
+# 2018.05.03 khubbard   os_platform "mac" added with "Darwin" detection.
+# 2018.05.03 khubbard   Support for "Deep SUMP" VCD added.
+# 2018.05.08 khubbard   change to sump.rd to limit burst reads to 1K max.
+# 2018.05.09 khubbard   default popup self.popup_list_values. Fix strtp bug
+# 2018.05.11 khubbard   finalized DeepSump support.
+# 2018.05.11 khubbard   change to vcdfile2signal_list for Boolean conversions.
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -163,7 +169,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2018.03.01";
+  self.vers = "2018.05.15";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -221,6 +227,7 @@ class main(object):
 
   self.signal_list = [];# List of class signal(object)s
   self.signal_delete_list = [];
+  self.sump_status = "";
 
   if ( self.file_name == None ):
 #   if ( sump_connect( self ) == False ):
@@ -368,7 +375,9 @@ class main(object):
       # print ("%02X" % self.sump.rd( addr = None )[0] );
 
       # There are different Done HW bits for RLE versus non-RLE acquisitions
-      if ( "acquire_rle" in self.acq_state  ):
+#     if ( "acquire_rle" in self.acq_state  ):
+      if ( "acquire_rle" in self.acq_state or \
+            self.sump.cfg_dict['deep_sump_en'] == 1 ):
         sump_done = self.sump.status_triggered + self.sump.status_rle_post;
       else:
         sump_done = self.sump.status_triggered + self.sump.status_ram_post;
@@ -376,10 +385,39 @@ class main(object):
       self.undersample_data = False;
       self.undersample_rate = 1;
 #     if ( ( self.sump.rd( addr = None )[0] & sump_done ) == sump_done ):
+#     if ( 
+#          ((self.sump.rd( addr = None )[0] & sump_done ) == sump_done ) or
+#          ( "download" in self.acq_state )
+#        ):
+      sump_status = self.sump.rd( addr = None )[0];
+
+#     if ( ( sump_status & self.sump.status_armed ) != 0 and
+#          ( sump_status & \
+      if ( ( sump_status & \
+             ( self.sump.status_ram_pre | self.sump.status_rle_pre ) != \
+             ( self.sump.status_ram_pre | self.sump.status_rle_pre ) )):
+        self.sump_status = "Pre-Trigger Buffer Fill";# Default
+      else:
+        self.sump_status = "%02x Trigger" % sump_status;# Default
+
+      if ( ( sump_status & self.sump.status_triggered ) != 0 ):
+        self.sump_status = "Post-Trigger Buffer Fill";# Default
+     
+
+#   self.status_armed          = 0x01;# Engine is Armed, ready for trigger
+#   self.status_triggered      = 0x02;# Engine has been triggered
+#   self.status_ram_post       = 0x04;# Engine has filled post-trig RAM 
+#   self.status_ram_pre        = 0x08;# Engine has filled pre-trigger RAM
+#   self.status_rle_pre        = 0x10;# RLE Engine has filled pre-trig RAM
+#   self.status_rle_post       = 0x20;# RLE Engine has filled post-trig RAM
+#   self.status_rle_en         = 0x80;# RLE Engine is present
+
+
       if ( 
-           ((self.sump.rd( addr = None )[0] & sump_done ) == sump_done ) or
+           (( sump_status & sump_done ) == sump_done ) or
            ( "download" in self.acq_state )
          ):
+
         if   ( self.acq_state == "download_rle" ): 
           self.acq_state = "acquire_rle";
         elif ( self.acq_state == "download_rle_lossy" ): 
@@ -395,6 +433,7 @@ class main(object):
           trig_i = sump_dump_data(self);
           self.rle_lossy = False;
         else:
+#         self.time.wait(8000); # Wait 8s to give DeepSump some time
           trig_i = sump_dump_rle_data(self);
         self.trig_i = trig_i;
         print("Trigger Index = %d " % trig_i );
@@ -444,6 +483,9 @@ class main(object):
 #         proc_cmd( self, "zoom_to", ["0", str( self.max_samples ) ] );
 #         proc_cmd( self, "zoom_to_cursors", [] );
           print("RENDERING-COMPLETE");
+
+          if ( self.vars["deep_sump_auto_vcd"] == "1" ):
+            proc_cmd( self, "save_vcd_deep", [] );
 
           file_shutdown = self.vars["sump_script_shutdown"];
           import os.path
@@ -783,6 +825,7 @@ class main(object):
         self.mouse_button = event.button;# Remember which button is Pressed
         (self.mouse_x,self.mouse_y) = pygame.mouse.get_pos();
         self.mouse_region = get_mouse_region(self,self.mouse_x,self.mouse_y);
+#       print( self.mouse_region );
 
         # Left-Mouse-Button-Down
         # If popup is already up and right-click is clicked again, emulate left
@@ -815,11 +858,18 @@ class main(object):
           self.popup_x -= 2*self.txt_width;
           self.popup_y -= self.txt_height;
 
-          if   ( self.mouse_region == "signal_value" ):
-            self.popup_list = self.popup_list_values;
-#         elif ( self.mouse_region == "signal_name" ):
-          else:
+#         if   ( self.mouse_region == "signal_value" ):
+#           self.popup_list = self.popup_list_values;
+#         else:
+#           self.popup_list = self.popup_list_names;
+
+# NEW
+          if   ( self.mouse_region == "signal_name" ):
             self.popup_list = self.popup_list_names;
+          else:
+            self.popup_list = self.popup_list_values;
+
+
           draw_popup_cmd( self );
           self.popup_sel = get_popup_sel( self );
           screen_flip( self ); # Place popup on top existing stuff, no erase
@@ -1414,6 +1464,12 @@ def init_manual( self ):
   a+=["                           this is M value to replace the N gaps.    "];
   a+=[" sump_rle_autocull       : If 1, remove any RLE dead time at front   "];
   a+=["                           or end of RLE acquisition samples.        "];
+  a+=[" deep_sump_auto_vcd      : If 1, call save_vcd_deep automatically.   "];
+  a+=[" deep_sump_pre_trig_percent  : 1-100. Percentage of RAM to download. "];
+  a+=[" deep_sump_post_trig_percent : 1-100. Percentage of RAM to download. "];
+  a+=[" deep_sump_user_ctrl         : 32bit ds_user_ctrl field              "];
+  a+=[" deep_sump_user_mask         : 32bit ds_user_mask field              "];
+  a+=[" deep_sump_user_cfg          : 32bit ds_user_cfg  field              "];
   a+=["                                                                     "];
   a+=["5.0 SUMP2 Hardware                                                   "];
   a+=[" The SUMP2 hardware is a single verilog file with fixed input parms  "];
@@ -1508,6 +1564,35 @@ def init_manual( self ):
   a+=["  SUMP2 software includes bd_shell support for changing variables    "];
   a+=["  on the fly and providing simple low level hardware access to regs. "];
   a+=["                                                                     "];
+  a+=[" 7.3 DeepSump ( 2018 )                                               "];
+  a+=["  DeepSump is an optional hardware addon to SUMP2-RLE. It works by   "];
+  a+=["  capturing RLE samples of the 32 events to a deeper and potentially "];
+  a+=["  slower memory device such as DRAM. A FIFO is used to maintain full "];
+  a+=["  bandwidth for short bursts of time. DeepSump captures are not      "];
+  a+=["  displayed in the sump2.py GUI, but are instead downloaded and      "];
+  a+=["  directly converted to VCD format for viewing in an external VCD    "];
+  a+=["  viewer such as GTKwave. The SUMP2-RLE format for compression is    "];
+  a+=["  very similar to VCD format, so conversion is very simple and fast. "];
+  a+=["  While sump2.py GUI is limited to dealing with RLE samples of 1-10ms"];
+  a+=["  in duration, DeepSump with GTKwave can easily deal with 1-10 Sec.  "];
+  a+=["  Note: DeepSump always captures using RLE, even when SUMP2 is doing "];
+  a+=["  a normal non-RLE capture.                                          "];
+  a+=["                                                                     "];
+  a+=["  DeepSump Example:                                                  "];
+  a+=["                   -------------                 ---------------     "];
+  a+=["  events[31:0]--->|   sump2.v   |-events[31:0]->|  deep_sump.v  |    "];
+  a+=["                  |             |-trigger------>|               |    "];
+  a+=["  dwords[511:0]-->|             |               |               |    "];
+  a+=["                  |             |               |               |    "];
+  a+=["  bus_xface <---->|             |<--bus_xface-->|     ------    |    "];
+  a+=["                  |             |               |    | fifo |   |    "];
+  a+=["                   -------------                 ---------------     "];
+  a+=["                         | 100Gbps                      | 1Gbps      "];
+  a+=["                   -------------                 ---------------     "];
+  a+=["                  | SRAM 4Kx576 |               |  Memory 1Mx64 |    "];
+  a+=["                   -------------                 ---------------     "];
+  a+=["                  Internal Memory                External Memory     "];
+  a+=["                                                                     "];
   a+=["8.0 BD_SERVER.py                                                     "];
   a+=["  The SUMP2.py application does not communicate directly to hardware "];
   a+=["  but instead uses BD_SERVER.py as an interface layer. BD_SERVER is  "];
@@ -1601,6 +1686,12 @@ def init_vars( self, file_ini ):
   vars["sump_user_pattern1"    ] = "00000000";
   vars["sump_data_enable"      ] = "00000000";
   vars["sump_watchdog_time"    ] = "00001000";
+  vars["deep_sump_auto_vcd"    ]   = "0";
+  vars["deep_sump_pre_trig_percent" ]   = "100";
+  vars["deep_sump_post_trig_percent" ]   = "100";
+  vars["deep_sump_user_ctrl"     ] = "00000000";
+  vars["deep_sump_user_mask"     ] = "00000000";
+  vars["deep_sump_user_cfg"      ] = "00000000";
 # vars["sump_rle_undersample"]   = "10";
 #  return;
 
@@ -2266,7 +2357,31 @@ def proc_cmd( self, cmd, parms ):
     self.last_filesave = filename_vcd;
     rts = ["save_vcd() Complete " + filename_vcd ];
 
-# elif ( cmd == "save_vcd" and \
+# HERENOW
+  elif ( cmd == "save_vcd_deep" ):
+    filename_vcd = make_unique_filename( self, "deep_sump_", ".vcd" );
+    print("save_vcd_deep()");
+    if ( self.sump.cfg_dict['deep_sump_en'] == 1 ):
+      # Check SumpDeep status
+      ds_status = 0xF0000000 & self.sump.rd( self.sump.cmd_rd_ds_trig_status )[0];
+      good_state =  \
+        self.sump.ds_status_rle_done  | \
+        self.sump.ds_status_triggered | \
+        self.sump.ds_status_rle_pre;
+      if ( ds_status == good_state ):
+        save_vcd_deep( self, filename_vcd );
+        screen_flip( self );# Only thing changing is the popup selection
+        draw_header( self,"save_vcd_deep() Complete " + filename_vcd );
+        print( "save_vcd_deep() Complete " + filename_vcd );
+        from shutil import copyfile;
+        copyfile( filename_vcd, "deep_sump.vcd" );
+      else:
+        print("ERROR: DeepSUMP incomplete capture : ERR %01x"%(ds_status>>28));
+        if ( ds_status & self.sump.ds_status_overrun_err != 0x00000000 ):
+          print("DeepSump Overrun. Try masking fast transitioning events");
+    else:
+      print("WARNING: DeepSUMP feature not present in hardware");
+
   elif (( cmd == "save_vcd" or 
           cmd == "save_vcd_full" or
           cmd == "save_vcd_cursors" ) and 
@@ -2450,6 +2565,9 @@ def proc_cmd( self, cmd, parms ):
          cmd == "sump_rle_autocull"    or
          cmd == "sump_rle_gap_remove"  or
          cmd == "sump_rle_gap_replace" or
+         cmd == "deep_sump_user_ctrl"  or
+         cmd == "deep_sump_user_mask"  or
+         cmd == "deep_sump_user_cfg"   or
          cmd == "sump_watchdog_time" 
        ): 
     name = cmd;
@@ -3328,7 +3446,6 @@ def draw_header( self, txt ):
     uut_name = "Software DEMO Mode :";
     txt = uut_name + " " + self.fatal_msg;
   msg ="SUMP2 " + self.vers + " (c) 2018 BlackMesaLabs : "+uut_name+" "+txt;
-# msg ="SUMP2 " + self.vers + " (c) 2017 BlackMesaLabs : "+txt;
   self.pygame.display.set_caption( msg );
 
 # if ( self.os_sys == "Linux" ):
@@ -3572,6 +3689,8 @@ def get_font( self , font_name, font_height ):
   else:
     import fnmatch;
     font_height = int( font_height, 10 ); # Conv String to Int
+    if ( self.os_platform == "mac" ):
+      font_height = int( font_height, 20 ); # Conv String to Int
     font_list = self.pygame.font.get_fonts(); # List of all fonts on System
     self.font_list = [];
     for each in font_list:
@@ -4364,7 +4483,8 @@ def draw_screen( self ):
       elif ( self.spin_char == "...." )  : self.spin_char = ".....";
       elif ( self.spin_char == "....." ) : self.spin_char = "";
       else                               : self.spin_char = ".";
-      draw_header( self,"Waiting for Trigger "+self.spin_char );
+#     draw_header( self,"Waiting for Trigger "+self.spin_char );
+      draw_header( self,"Waiting for " + self.sump_status + self.spin_char );
 #     print( self.spin_char );
 
 #   txt_list = [ "","","", cmd_txt ];
@@ -4797,6 +4917,152 @@ def add_wave( self, words ):
       # Append old object to new list
       return sig_obj;
 
+###############################################################################
+# Create a deep VCD file going straight from Deep RLE RAM to VCD ( no decomp )
+# Potentially this will be really large, create a nice divide between sump2.py
+# gui and work of generating VCD file. Potentially this can be spawned off
+# to a separate native program if needed for performance.
+def save_vcd_deep( self, filename_vcd ):
+  # Grab the Deep Sump data from Memory
+  rle_list = sump_dump_deep_data( self );
+  tuplelist2file( self, "deep_sump_raw.txt", rle_list );
+
+  freq_mhz = self.sump.cfg_dict['frequency'];
+  freq_ps  = int( 1000000.0 / freq_mhz );
+
+  # Process the RLE samples so that time begins at 0.
+  ( rle_time, rle_data ) = list( zip(*rle_list) );
+  mem_len = len( rle_time );
+  rle_min = min( rle_time );
+  rle_max = max( rle_time );
+
+  print("save_vcd_deep(): Reordering RLE timestamps"); 
+  # Either just subtract an offset from all samples, or for really long
+  # captures that have rolled the timer, adjust the time so that big
+  # numbers become small and small numbers become big in time (barrel roll)
+  if ( rle_max > 0xFF000000 ):
+    print("NOTE: RLE Timer Wrapped");
+    # Time rolled over. Go thru entire list and subtract 0x80000000 from
+    # numbers greater than 0x80000000 and add 0x80000000 to numbers less
+    new_rle_time = [];
+    for each in rle_time:
+      if ( each > 0x80000000 ):
+        new_rle_time += [ each - 0x80000000 ];
+      else:
+        new_rle_time += [ each + 0x80000000 ];
+    rle_time = new_rle_time;
+    rle_min = min( rle_time );
+    rle_max = max( rle_time );
+
+  print("rle_min = %08x" % rle_min );
+  print("rle_max = %08x" % rle_max );
+  print("mem_len = %d  " % mem_len );
+
+  rle_time = [each - rle_min for each in rle_time];# List Comprehension
+
+  zero_loc = rle_time.index( 0x00000000 );# Find location of 1st sample 
+  if ( zero_loc != 0 ):
+    print("ERROR: RLE TimeStamps from DeepSump appear to be invalid.");
+
+# Now make new zippered list with the time adjusted to 0x00000000
+  rle_list = list( zip( rle_time , rle_data ) );
+
+  print("save_vcd_deep(): Starting RLE to VCD conversion"); 
+  tuplelist2file( self, "deep_sump.txt", rle_list );
+
+# print("Final LIST");
+# for ( t,d ) in rle_list:
+#   print("%08x %08x" % (t,d) );
+
+  txt2vcd = RLETXT2VCD( self );# Instantiate Class for the VCD Conversion
+  rts = txt2vcd.conv_rletxt2vcd( self.signal_list, rle_list, freq_ps );
+
+  list2file( self, filename_vcd, rts );
+  return;
+
+###############################################################################
+# Create a deep VCD file going straight from Deep RLE RAM to VCD ( no decomp )
+# Potentially this will be really large, create a nice divide between sump2.py
+# gui and work of generating VCD file. Potentially this can be spawned off
+# to a separate native program if needed for performance.
+# Note: This can be removed. This is the original version that was fixed 50/50
+# for RAM downloads. Newer version allows variable download lengths.
+def save_vcd_deep_org( self, filename_vcd ):
+  # Grab the Deep Sump data from Memory
+  rle_list = sump_dump_deep_data( self );
+  tuplelist2file( self, "deep_sump_raw.txt", rle_list );
+
+  freq_mhz = self.sump.cfg_dict['frequency'];
+  freq_ps  = int( 1000000.0 / freq_mhz );
+
+  # Pickle the data . protocol 0 ( ASCII ), -1 = Highest Binary
+# import pickle;
+# import gzip;
+# filename_pkl = make_unique_filename( self, "deep_sump_", ".pkl.gz" );
+# pickle_list = ( self.signal_list, rle_list, freq_ps );
+# pickle_file = gzip.GzipFile( filename_pkl , 'wb' );
+# pickle_file.write( pickle.dumps( pickle_list, -1  ) );
+# pickle_file.close();
+
+  # Process the RLE samples so that time begins at 0.
+  ( rle_time, rle_data ) = list( zip(*rle_list) );
+  mem_len = len( rle_time );
+  rle_min = min( rle_time );
+  rle_max = max( rle_time );
+
+  # HERENOW
+# for ( t,d ) in rle_list:
+#   print("%08x %08x" % (t,d) );
+
+  print("save_vcd_deep(): Reordering RLE timestamps"); 
+  # Either just subtract an offset from all samples, or for really long
+  # captures that have rolled the timer, adjust the time so that big
+  # numbers become small and small numbers become big in time (barrel roll)
+  if ( rle_max > 0xFF000000 ):
+    print("NOTE: RLE Timer Wrapped");
+    # Time rolled over. Go thru entire list and subtract 0x80000000 from
+    # numbers greater than 0x80000000 and add 0x80000000 to numbers less
+    new_rle_time = [];
+    for each in rle_time:
+      if ( each > 0x80000000 ):
+        new_rle_time += [ each - 0x80000000 ];
+      else:
+        new_rle_time += [ each + 0x80000000 ];
+    rle_time = new_rle_time;
+    rle_min = min( rle_time );
+    rle_max = max( rle_time );
+
+  print("rle_min = %08x" % rle_min );
+  print("rle_max = %08x" % rle_max );
+  print("mem_len = %d  " % mem_len );
+
+  rle_time = [each - rle_min for each in rle_time];# List Comprehension
+
+  pre_trig_time = rle_time[0:mem_len//2];
+  post_trig_time = rle_time[mem_len//2:];
+  zero_loc = pre_trig_time.index( 0x00000000 );# Find location of 1st sample
+
+  # Now make new zippered list with the time adjusted to 0x00000000
+  rle_list = list( zip( pre_trig_time + post_trig_time, rle_data ) );
+
+  # Reorder the Zipped Data + Time in chronological order
+  rle_pre_list  = rle_list[0:mem_len//2];# All the Pre-Trigger Captures
+  rle_post_list = rle_list[mem_len//2:];# All the Post-Trigger Captures
+  rle_pre_list  = rle_pre_list[zero_loc:] + rle_pre_list[:zero_loc];
+  rle_list = rle_pre_list + rle_post_list;
+  print("save_vcd_deep(): Starting RLE to VCD conversion"); 
+
+# print("Final LIST");
+# for ( t,d ) in rle_list:
+#   print("%08x %08x" % (t,d) );
+  tuplelist2file( self, "deep_sump.txt", rle_list );
+
+  txt2vcd = RLETXT2VCD( self );# Instantiate Class for the VCD Conversion
+  rts = txt2vcd.conv_rletxt2vcd( self.signal_list, rle_list, freq_ps );
+
+  list2file( self, filename_vcd, rts );
+  return;
+
 
 ###############################################################################
 # Dump the signal_list to an ASCII hlist.txt 
@@ -4911,7 +5177,7 @@ def sump_connect( self ):
       log( self, [ txt ] );
       return False;
   
-  self.sump = Sump2( self.bd, int( self.vars["sump_addr"],16 ) );
+  self.sump = Sump2( self, self.bd, int( self.vars["sump_addr"],16 ) );
   self.sump.rd_cfg();# populate sump.cfg_dict[] with HW Configuration
   if ( self.sump.cfg_dict['hw_id'] != 0xABBA ):
     txt = "ERROR: Unable to locate SUMP Hardware";
@@ -4932,6 +5198,13 @@ def sump_connect( self ):
     self.popup_list_values.remove("Acquire_RLE_8x");
     self.popup_list_values.remove("Acquire_RLE_64x");
     self.popup_list_values.remove("Arm_RLE");
+
+# if ( self.sump.cfg_dict['deep_sump_en'] == 0 ):
+#   self.popup_list_values.remove("Save_VCD_Deep");
+
+# if ( self.sump.cfg_dict['deep_sump_en'] == 1 ):
+#   print("Deep_SUMP is available with %d RLE samples" % \
+#     self.cfg_dict['deep_ram_len'] );
 
   if ( self.sump.cfg_dict['trig_wd_en'] == 0 ):
     list_remove( self.popup_list_names, "Trigger_Watchdog");
@@ -4956,10 +5229,12 @@ def sump_connect( self ):
   self.sump.wr( self.sump.cmd_wr_trig_type,     self.sump.trig_pat_ris );
   self.sump.wr( self.sump.cmd_wr_trig_field,    0x00000000 );#
   self.sump.wr( self.sump.cmd_wr_trig_dly_nth,  0x00000001 );#Delay + nTh
-# self.sump.wr( self.sump.cmd_wr_trig_position, sump_size/2);#SamplesPostTrig
   self.sump.wr( self.sump.cmd_wr_trig_position, sump_size//2);#SamplesPostTrig
-# self.sump.wr( self.sump.cmd_wr_rle_event_en,  0xFFFFFFF0 );#RLE event en
   self.sump.wr( self.sump.cmd_wr_rle_event_en,  0xFFFFFFFF );#RLE event en
+
+  self.sump.wr( self.sump.cmd_wr_ds_user_ctrl,  0x00000000 );
+  self.sump.wr( self.sump.cmd_wr_ds_user_mask,  0x00000000 );
+  self.sump.wr( self.sump.cmd_wr_ds_user_cfg,   0x00000000 );
 
   self.sump.wr( self.sump.cmd_state_reset,      0x00000000 );
 # self.sump.wr( self.sump.cmd_state_arm,        0x00000000 );
@@ -4982,6 +5257,9 @@ def sump_arm( self, en ):
       user_ctrl     = int( self.vars["sump_user_ctrl"     ],16 );
       user_pattern0 = int( self.vars["sump_user_pattern0" ],16 );
       user_pattern1 = int( self.vars["sump_user_pattern1" ],16 );
+      ds_user_ctrl  = int( self.vars["deep_sump_user_ctrl"],16 );
+      ds_user_mask  = int( self.vars["deep_sump_user_mask"],16 );
+      ds_user_cfg   = int( self.vars["deep_sump_user_cfg" ],16 );
       wd_time       = int( self.vars["sump_watchdog_time" ],16 );
 
       # Convert trigger ASCII into integers
@@ -5010,6 +5288,9 @@ def sump_arm( self, en ):
       print("%08x" % user_ctrl        );
       print("%08x" % user_pattern0    );
       print("%08x" % user_pattern1    );
+      print("%08x" % ds_user_ctrl     );
+      print("%08x" % ds_user_mask     );
+      print("%08x" % ds_user_cfg      );
 
       self.sump.wr( self.sump.cmd_wr_trig_type ,    trig_type_int );
       self.sump.wr( self.sump.cmd_wr_trig_field,    trig_field   );
@@ -5020,6 +5301,12 @@ def sump_arm( self, en ):
       self.sump.wr( self.sump.cmd_wr_watchdog_time, wd_time  );
       self.sump.wr( self.sump.cmd_wr_user_pattern0, user_pattern0);
       self.sump.wr( self.sump.cmd_wr_user_pattern1, user_pattern1);
+
+      self.sump.wr( self.sump.cmd_wr_ds_user_ctrl  , ds_user_ctrl);
+      self.sump.wr( self.sump.cmd_wr_ds_user_mask  , ds_user_mask);
+      self.sump.wr( self.sump.cmd_wr_ds_user_cfg   , ds_user_cfg);
+       
+      # Note: cmd_state_arm MUST be last. Hardware uses this as a JK for Armed
       self.sump.wr( self.sump.cmd_state_reset,      0x00000000 );
       self.sump.wr( self.sump.cmd_state_arm,        0x00000000 );
     except:
@@ -5370,6 +5657,16 @@ def sump_bundle_data( self ):
       my_level  = my_signal.hier_level;
       rip_list  = [];
   return;
+
+#########################################################################
+# Dump DeepSump data from RAM
+def sump_dump_deep_data( self ):
+  print("sump_dump_deep_ram( rle_data )");
+  rle_data = sump_dump_deep_ram(self,rd_page = 0x0, rd_ptr = 0x0000 );
+  print("sump_dump_deep_ram( rle_time )");
+  rle_time = sump_dump_deep_ram(self,rd_page = 0x1, rd_ptr = 0x0000 );
+  rle_list = list(zip( rle_time, rle_data ));
+  return rle_list;
 
 
 #########################################################################
@@ -5892,6 +6189,80 @@ def sump_dump_ram( self, rd_page = 0, rd_ptr = None ):
 
 
 ########################################################
+# Return a complete list of acquired SUMP deep capture data      
+def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None ):
+# ram_len    = self.sump.cfg_dict['deep_ram_len'];
+# self.sump.wr( self.sump.cmd_wr_ds_ram_page, rd_page );
+# if ( rd_ptr != None ):
+#   self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , rd_ptr );# 
+# data = self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = ram_len );
+# return data;
+
+  ram_len    = self.sump.cfg_dict['deep_ram_len'];
+  trigger_ptr = 0x0FFFFFFF & self.sump.rd( self.sump.cmd_rd_ds_trig_status )[0];
+  pre_trig_percent  = int( self.vars["deep_sump_pre_trig_percent"], 10 );
+  post_trig_percent = int( self.vars["deep_sump_post_trig_percent"], 10 );
+  self.sump.wr( self.sump.cmd_wr_ds_ram_page, rd_page );
+
+  half_len = ram_len // 2;# Half the RAM is pre-Trig, other is post-Trig
+
+  pre_offset  = int( ( half_len * pre_trig_percent ) / 100.0 );
+  post_offset = int( ( half_len * post_trig_percent ) / 100.0 );
+
+  # Section-1 is either half or all of pre-trig capture.
+  # Section-2 is other half of pre-trig capture if region rolls over
+  # Section-3 is all the post-trig capture
+  start1 = trigger_ptr - pre_offset + 1;
+  stop1  = trigger_ptr;
+  start2 = None;
+  stop2  = None;
+  start3 = None;
+  stop3  = None;
+
+  if ( start1 < 0 ):
+    start2  = 0;
+    stop2   = stop1;
+    start1 += half_len;
+    stop1   = half_len - 1;
+  else:
+    if ( stop1 > half_len-1 ):
+      start2 = 0;
+      stop2  = stop1 - ( half_len - 1 );
+      stop1  = half_len-1;
+  start3 = half_len;
+  stop3  = half_len  + post_offset - 1;
+
+  len1 = stop1-start1+1;
+  self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , start1 );# 
+  data = self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = len1 );
+
+  if ( start2 != None ):
+    len2 = stop2-start2+1;
+    self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , start2 );# 
+    data += self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = len2 );
+
+  len3 = stop3-start3+1;
+  self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , start3 );# 
+  data += self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = len3 );
+  return data;
+
+# HERENOW
+
+# if ( start2 != None ):
+#   print("%d - %d : %d - %d" % ( start1, stop1, start2, stop2 ));
+# else:
+#   print("%d - %d          " % ( start1, stop1                ));
+#
+# print("%d - %d          " % ( start3, stop3                ));
+# print("sump_dump_deep_ram()");
+# print(" ram_len = %d " % ram_len );
+# print(" rd_ptr  = %d " % rd_ptr  );
+# print( len( data ) );
+# for each in data[0:10]:
+#   print("%08x" % each );
+
+
+########################################################
 # Use the wave_list to generate a new signal_list   
 #def wave2signal_list( self ):
 # ram_len    = self.sump.cfg_dict['ram_len'];
@@ -6281,12 +6652,16 @@ def vcdfile2signal_list( self, file_name ):
       while ( time_now <= time_stamp ):
         for sig_obj in self.signal_list:
           # VV switch from "1" "0" ASCII to boolean for smaller DRAM use
-          if ( sig_obj.last_value == "1" ):
-            value = True;
-          elif ( sig_obj.last_value == "0" ):
-            value = False;
-          else:
+          if ( sig_obj.bits_total > 1 ):
             value = sig_obj.last_value;
+          else:
+            if ( sig_obj.last_value == "1" ):
+              value = True;
+            elif ( sig_obj.last_value == "0" ):
+              value = False;
+            else:
+              value = sig_obj.last_value;
+          
 #         sig_obj.values.append( sig_obj.last_value );
           sig_obj.values.append( value );
           sample_cnt += 1;# Count Total Samples for final report at end
@@ -6325,6 +6700,12 @@ def vcdfile2signal_list( self, file_name ):
         line_num = i + dump_vars_index + 1;
         print( "ERROR line " + str(line_num) + " : " + words[0]);
         value = None;
+
+#     if ( value != None ):
+#       print(symb);
+#       print(num_bits);
+#       print(num_nibs);
+#HERENOW
     
       
       # Is symb in rip_list?  If not, do normal processing
@@ -6416,7 +6797,6 @@ def init_globals( self ):
   # Define the colors we will use in RGB format
 
   import platform,os;
-  self.os_sys = platform.system();  # Windows vs Linux
 
   try:
     import RPi.GPIO as gpio;
@@ -6424,8 +6804,12 @@ def init_globals( self ):
   except ImportError:
     self.os_platform ="pc";# Assume a PC
 
-  self.fatal_msg = None;
+  self.os_sys = platform.system();  # Windows vs Linux
+  if ( self.os_sys == "Darwin" ):
+    self.os_sys = "Linux";# Mac Support
+    self.os_platform ="mac";
 
+  self.fatal_msg = None;
   self.undersample_data = False;
   self.undersample_rate = 1;
   self.gui_active = False;
@@ -6584,7 +6968,11 @@ def init_globals( self ):
                                      "sump_rle_autocull",\
                                      "sump_rle_gap_remove",\
                                      "sump_rle_gap_replace",\
-                                     "sump_watchdog_time"],\
+                                     "sump_watchdog_time",\
+                                     "deep_sump_user_ctrl",\
+                                     "deep_sump_user_mask",\
+                                     "deep_sump_user_cfg",\
+                                     ],\
     "--------",["Acquisition_Length",
                 "[----T----]",
                 "  [--T--]  ", 
@@ -6648,7 +7036,7 @@ def init_globals( self ):
                ["File_Save","Save_PNG","Save_JPG","Save_BMP",
                 "Save_TXT","Save_Rename"],
                file_load_list,
-               ["VCD_Save","Save_VCD_Full","Save_VCD_Cursors",],
+               ["VCD_Save","Save_VCD_Full","Save_VCD_Cursors","Save_VCD_Deep"],
                vcd_load_list,
 
 #              ["Fonts","Font_Larger","Font_Smaller"],
@@ -6744,9 +7132,9 @@ class signal(object):
 
 ##############################################################################
 class Sump2:
-  def __init__ ( self, backdoor, addr ):
+  def __init__ ( self, parent, backdoor, addr ):
     self.bd = backdoor;
-
+    self.parent = parent;
 
     self.addr_ctrl = addr;
     self.addr_data = addr + 0x4;
@@ -6768,6 +7156,15 @@ class Sump2:
     self.cmd_rd_trigger_ptr    = 0x0e;
     self.cmd_rd_ram_data       = 0x0f;
 
+    self.cmd_rd_ds_width_len     = 0x18;# DeepSUMP registers
+    self.cmd_rd_ds_trig_status   = 0x19;
+    self.cmd_rd_ds_ram_data      = 0x1a;
+    self.cmd_wr_ds_ram_ptr       = 0x1b;
+    self.cmd_wr_ds_ram_page      = 0x1c;
+    self.cmd_wr_ds_user_ctrl     = 0x1d;
+    self.cmd_wr_ds_user_mask     = 0x1e;
+    self.cmd_wr_ds_user_cfg      = 0x1f;
+
     self.cmd_wr_user_ctrl      = 0x10;
     self.cmd_wr_user_pattern0  = 0x11;# Also Mask    for Pattern Matching
     self.cmd_wr_user_pattern1  = 0x12;# Also Pattern for Pattern Matching
@@ -6785,6 +7182,11 @@ class Sump2:
     self.trig_watchdog         = 0x08;# Watchdog trigger
     self.cfg_dict = {};
 
+    self.ds_status_overrun_err = 0x80000000;# DeepSUMP RAM was overrun
+    self.ds_status_rle_done    = 0x40000000;# DeepSUMP Acquisition Complete
+    self.ds_status_triggered   = 0x20000000;# DeepSUMP has Triggered
+    self.ds_status_rle_pre     = 0x10000000;# DeepSUMP RLEpre has finished
+
     self.status_armed          = 0x01;# Engine is Armed, ready for trigger
     self.status_triggered      = 0x02;# Engine has been triggered
     self.status_ram_post       = 0x04;# Engine has filled post-trig RAM 
@@ -6801,15 +7203,33 @@ class Sump2:
     # Note: addr of None means use existing ctrl address and just read data
     if ( addr != None ):
       self.bd.wr( self.addr_ctrl, [ addr ] );
-    return self.bd.rd( self.addr_data, num_dwords, repeat = True);
+#   return self.bd.rd( self.addr_data, num_dwords, repeat = True);
+    dword_cnt = num_dwords;
+    percent = 0;
+    percent_total = ((1.0)*num_dwords );
+    rts = [];
+    while ( dword_cnt > 1024 ):
+      rts += self.bd.rd( self.addr_data, num_dwords = 1024, repeat = True);
+      dword_cnt -= 1024;
+      # This takes a while, so calculate and print percentage as it goes by
+      if ( (float(len(rts)) / percent_total) >= percent ):
+        perc_str = ( str( int(100*percent) ) + "%");
+        txt = ("Downloading samples " + perc_str );
+        draw_header( self.parent , txt); print( txt );
+        percent += .10;
+    rts += self.bd.rd( self.addr_data, num_dwords = dword_cnt, repeat = True);
+    return rts;
+      
 
   def rd_cfg( self ):
     hwid_data = self.rd( self.cmd_rd_hw_id_rev     )[0];
     ram_data  = self.rd( self.cmd_rd_ram_width_len )[0];
     freq_data = self.rd( self.cmd_rd_sample_freq   )[0];
+    deep_ram  = self.rd( self.cmd_rd_ds_width_len ) [0];
     print("%08x" % hwid_data );
     print("%08x" % freq_data );
     print("%08x" % ram_data );
+    print("%08x" % deep_ram );
 
     self.cfg_dict['hw_id']       = ( hwid_data & 0xFFFF0000 ) >> 16;
     self.cfg_dict['hw_rev']      = ( hwid_data & 0x0000FF00 ) >> 8;
@@ -6818,6 +7238,7 @@ class Sump2:
 #   self.cfg_dict['data_en']     = 1;# This bit doesn't exist yet in HW
 #   self.cfg_dict['trig_wd_en']  = 1;# This bit doesn't exist yet in HW
     self.cfg_dict['nonrle_dis']  = ( hwid_data & 0x00000010 ) >> 4;
+    self.cfg_dict['deep_sump_en']= ( hwid_data & 0x00000080 ) >> 7;
     self.cfg_dict['rle_en']      = ( hwid_data & 0x00000008 ) >> 3;
     self.cfg_dict['pattern_en']  = ( hwid_data & 0x00000004 ) >> 2;
     self.cfg_dict['trig_nth_en'] = ( hwid_data & 0x00000002 ) >> 1;
@@ -6827,6 +7248,7 @@ class Sump2:
     self.cfg_dict['ram_dwords']  = ( ram_data  & 0x00FF0000 ) >> 14;# >>16,<<2
     self.cfg_dict['ram_event_bytes'] = ( ram_data  & 0x0F000000 ) >> 24;
     self.cfg_dict['ram_rle']         = ( ram_data  & 0xF0000000 ) >> 28;
+    self.cfg_dict['deep_ram_len'] = 2**(( deep_ram  & 0x000000FF ) >> 0);
 
   def close ( self ):
     return;
@@ -6988,6 +7410,102 @@ class TXT2VCD:
     rts += [ "#0" ];
     rts += [ "$dumpvars"];
     rts += [ "$end"];
+    return rts;
+
+
+##############################################################################
+# functions to convert RLE text time samples into a VCD file.
+class RLETXT2VCD:
+  def __init__ ( self, parent ):
+    self.char_code = self.build_char_code(); # ['AA','BA',etc]
+    self.parent    = parent;
+    module_name = self.parent.vars["uut_name"];
+    self.header    = self.build_header( module_name );
+    self.footer    = self.build_footer();
+    return;
+
+  def build_char_code( self ):
+    """
+    VCDs map wires to alphabet names such as AA,BA. Build a 676 (26x26) list
+    """
+    char_code = []; # This will be ['AA','BA',..,'ZZ']
+    for ch1 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+      for ch2 in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        char_code += [ ch2+ch1 ];
+    return char_code;
+
+  def build_header( self, module_name ):
+    import time;
+    now = time.time();
+    means = time.ctime( now );
+    rts  = [];
+    rts += [ "$date " + means +                  " $end" ];
+#   rts += [ "$date      Wed May  4 12:00:00 2018  $end" ];
+#   rts += [ "$version   ModelSim Version 6.0c     $end" ];
+    rts += [ "$version   sump2.py by BlackMesaLabs $end" ];
+    rts += [ "$timescale 1ps                       $end" ];
+#   rts += [ "$scope     module   module_name     $end" ];
+    rts += [ "$scope     module " + module_name + " $end" ];
+    return rts;
+
+  def build_footer( self ):
+    rts  = [];
+    rts += [ "$upscope $end"];
+    rts += [ "$enddefinitions $end"];
+    rts += [ "#0" ];
+    rts += [ "$dumpvars"];
+    rts += [ "$end"];
+    return rts;
+
+  def conv_rletxt2vcd ( self, signal_list, rle_list, ps_per_clk ):
+    """
+    Take in a sump2.py signal_list and rle_list and spit out a vcd
+    """
+    rts =  self.header;
+
+    # Assign a unique VCD symbol ( "AC" ) to each signal and make the name_map
+    ch_ptr = 0;
+    for sig_obj in signal_list:
+      if ( sig_obj.type == "signal" ):
+        ch_code = self.char_code[ ch_ptr ]; ch_ptr+=1;
+        sig_obj.vcd_symbol = ch_code;
+        if ( sig_obj.nickname == "" ):
+          name = sig_obj.name;
+        else:
+          name = sig_obj.nickname;
+        rts += [ "$var wire 1 " + ch_code + " " + name + " $end" ];
+
+    # Make a list for string comparison for "event[0]"
+    event_name_list = [];
+    for bit in range (0,32):
+      event_name_list += ["event[%d]" % bit ];
+
+    # Now read out all the time samples
+    percent = 0;
+    percent_total = float(len(rle_list));
+    i = 0;
+    for ( rle_time, rle_data ) in rle_list:
+      vcd_ps_time = rle_time * ps_per_clk;
+      rts += [ "#" + "%d" % vcd_ps_time ];
+      for sig_obj in signal_list:
+        if ( sig_obj.type == "signal" ):
+          if ( sig_obj.name[0:5] == "event" ):
+            bit = event_name_list.index(sig_obj.name);
+            if ( sig_obj.visible == False or sig_obj.hidden == True ):
+              val = "x";
+            else:
+              if ( ( ( 0x00000001 << bit ) & rle_data ) != 0x00000000 ):
+                val = "1";
+              else:
+                val = "0";
+            rts += [ val + sig_obj.vcd_symbol ];
+      i+=1;
+      if ( (float(i) / percent_total) >= percent ):
+        perc_str = ( str( int(100*percent) ) + "%");
+        txt = ("RLE to VCD conversion " + perc_str );
+        draw_header( self.parent , txt); print( txt );
+        percent += .10;
+    rts += self.footer;
     return rts;
 
 

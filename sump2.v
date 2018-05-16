@@ -2,20 +2,22 @@
 -- (C) Copyright 2016 Kevin M. Hubbard - All rights reserved.
 -- Source file: sump2.v
 -- Date:        July 2016
--- Author:      khubbard @ Black Mesa Labs
+-- Author:      khubbard
 -- Description: SUMP2 is a fast and simple logic analyzer.
---              It captures N/2 samples before and after a specified trigger
---              event where N is length of BRAM specified when instantiated. 
---              It is designed to scale easily from small and simple to wide 
---              and deep block RAM primiting. 
+--              It captures N/2 samples before and after a specified 
+--              positive edged trigger event where N is length of BRAM. 
+--              It is designed to be really small and simple for places where
+--              SUMP-RLE is either too big or overly complicated. It also
+--              runs much faster and wider than SUMP-RLE.
+--              SUMP2 is NOT software compatible with SUMP-RLE.
 -- Language:    Verilog-2001
 -- Simulation:  Mentor-Modelsim
--- Synthesis:   Xilinst-XST, Lattice-Synplify
--- License:     This project is licensed with the CERN Open Hardware Licence 
---              v1.2.  You may redistribute and modify this project under the 
---              terms of the CERN OHL v.1.2. (http://ohwr.org/cernohl). 
---              This project is distributed WITHOUT ANY EXPRESS OR IMPLIED 
---              WARRANTY, INCLUDING OF MERCHANTABILITY, SATISFACTORY QUALITY 
+-- Synthesis:   Xilint-XST,Xilinx-Vivado,Lattice-Synplify
+-- License:     This project is licensed with the CERN Open Hardware Licence
+--              v1.2.  You may redistribute and modify this project under the
+--              terms of the CERN OHL v.1.2. (http://ohwr.org/cernohl).
+--              This project is distributed WITHOUT ANY EXPRESS OR IMPLIED
+--              WARRANTY, INCLUDING OF MERCHANTABILITY, SATISFACTORY QUALITY
 --              AND FITNESS FOR A PARTICULAR PURPOSE. Please see the CERN OHL
 --              v.1.2 for applicable Conditions.
 --
@@ -34,14 +36,24 @@
 --   freq_mhz       =  16'd80   : Freq integer 0 MHz up to 65 GHz ( 16bit )
 --   freq_fracts    =  16'h0000 : Freq fraction bits, example C000 = 0.75 MHz
 --   sump_id        =  16'hABBA : Don't Change
---   sump_rev       =   8'h01   : Don't Change
+--   sump_rev       =   8'h02   : Don't Change
 --
 -- LocalBus 2 DWORD Register Interface
 --   lb_cs_ctrl : PCI addr sel for Control 
 --   lb_cs_data : PCI addr sel for Data transfers. +0x4 offset from lb_cs_ctrl
 --
+--   clk_lb      _/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_
+--   lb_cs_ctrl  _____/   \___/   \___________________________________________
+--   lb_cs_data  _________________________/   \_______________________________
+--   lb_wr       _____/    \__/   \___________________________________________
+--   lb_rd       _________________________/    \______________________________
+--   lb_wr_d     -----<    >--<   >-------------------------------------------
+--   lb_rd_dy    _________________________________________/    \______________
+--   lb_rd_d     -----------------------------------------<    >--------------
+--                                        |---------------| variable distance
+--
 -- Software Interface
--- 5bit Control Commands:
+-- 6bit Control Commands:
 --   0x00 : Idle + Read Status
 --   0x01 : ARM  + Read Status
 --   0x02 : Reset
@@ -66,6 +78,17 @@
 --   0x12 : Load User Pattern1
 --   0x13 : Load Data Enable Field
 --
+--   0x18 : Read Deep-RAM Width+Length
+--   0x19 : Read Deep-RAM Trigger Location + Status
+--   0x1a : Read Deep-RAM Data ( address auto incrementing )
+--   0x1b : Load Deep-RAM Read Pointer
+--   0x1c : Load Deep-RAM Read Page
+--   0x1d : Load Deep-Sump User Control
+--   0x1e : Load Deep-Sump User Mask     
+--   0x1f : Load Deep-Sump User Cfg     
+--
+--   0x20 - 0x3F : Reserved for future use
+--
 -- Trigger Types:
 --   AND Rising            = 0x00;
 --   AND Falling           = 0x01;
@@ -79,7 +102,8 @@
 -- Revision History:
 -- Ver#  When      Who      What
 -- ----  --------  -------- --------------------------------------------------
--- 0.1   07.01.16  khubbard Creation
+-- 0.1   07.01.16  khubbard Creation. Rev01
+-- 0.2   05.14.18  khubbard Rev02 DeepSump support added. Ctrl from 5 to 6bits
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 
@@ -93,15 +117,17 @@ module sump2 #
 
    parameter nonrle_en      =  1,
    parameter rle_en         =  1,
+   parameter data_en        =  1,
    parameter pattern_en     =  1,
    parameter trigger_nth_en =  1,
    parameter trigger_dly_en =  1,
    parameter trigger_wd_en  =  1,
+   parameter deep_sump_en   =  0,
 
    parameter freq_mhz       =  16'd80,
    parameter freq_fracts    =  16'h0000,
    parameter sump_id        =  16'hABBA,
-   parameter sump_rev       =   8'h01
+   parameter sump_rev       =   8'h02
 )
 (
   input  wire         reset,
@@ -123,13 +149,25 @@ module sump2 #
   input  wire         trigger_in,
   output reg          trigger_out,
 
+  output reg          ds_trigger,
+  output reg  [31:0]  ds_events,
+  output wire [31:0]  ds_user_ctrl,
+  output reg  [5:0]   ds_cmd_lb, 
+  output reg  [5:0]   ds_cmd_cap, 
+  output reg          ds_rd_req,
+  output reg          ds_wr_req,
+  output reg  [31:0]  ds_wr_d, 
+  input  wire [31:0]  ds_rd_d,
+  input  wire         ds_rd_rdy,
+  input  wire         ds_rle_pre_done,
+  input  wire         ds_rle_post_done,
+
   input  wire [31:0]  events_din,
 
   input  wire [127:0] dwords_3_0,
   input  wire [127:0] dwords_7_4,
   input  wire [127:0] dwords_11_8,
-  input  wire [127:0] dwords_15_12,
-  output reg  [3:0]   led_bus
+  input  wire [127:0] dwords_15_12
 );
 
 
@@ -137,18 +175,12 @@ module sump2 #
   wire [15:0]             zeros;
   wire [15:0]             ones;
   wire [7:0]              cap_status;
-  wire [4:0]              ctrl_cmd;
-  reg  [4:0]              ctrl_cmd_q;
-  reg  [4:0]              ctrl_cmd_loc;
-  reg  [4:0]              ctrl_cmd_p1;
+  wire [5:0]              ctrl_cmd;
+  reg  [5:0]              ctrl_cmd_loc;
   reg                     ctrl_cmd_xfer;
   wire [4:0]              ctrl_rd_page;
-  reg  [4:0]              ctrl_rd_page_p1;
   wire [15:0]             ctrl_rd_ptr;
-  wire                    ctrl_trigger_edge;
-  wire [4:0]              ctrl_trigger;
-  reg  [4:0]              ctrl_trigger_p1;
-  reg  [4:0]              ctrl_reg;
+  reg  [5:0]              ctrl_reg;
   reg  [31:0]             events_loc;
   reg                     trigger_loc;
   reg                     trigger_or;
@@ -160,13 +192,9 @@ module sump2 #
   reg                     xfer_clr;
   reg                     rd_inc;
   reg                     armed_jk;
-  reg                     armed_jk_p1;
   reg                     triggered_jk;
-  reg                     triggered_jk_p1;
   reg                     acquired_jk;
-  reg                     acquired_jk_p1;
   reg                     complete_jk;
-  reg                     complete_jk_p1;
 
   reg  [31:0]             ctrl_04_reg;
   reg  [31:0]             ctrl_05_reg;
@@ -180,9 +208,9 @@ module sump2 #
   reg  [31:0]             ctrl_11_reg;
   reg  [31:0]             ctrl_12_reg;
   reg  [31:0]             ctrl_13_reg;
-  reg  [31:0]             ctrl_13_reg_p1;
 
   reg  [31:0]             ctrl_14_reg;
+  reg  [31:0]             ctrl_1d_reg;
   wire [31:0]             watchdog_reg;
   reg  [31:0]             watchdog_cnt;
   reg                     wd_armed_jk;
@@ -192,9 +220,7 @@ module sump2 #
   wire [3:0]              trigger_type;
   wire [31:0]             trigger_pos;
   wire [15:0]             trigger_nth;
-  reg  [15:0]             trigger_nth_p1;
   wire [15:0]             trigger_delay;
-  reg  [15:0]             trigger_delay_p1;
   reg  [15:0]             trigger_dly_cnt;
   wire [31:0]             rle_event_en;
   reg  [15:0]             trigger_cnt;
@@ -236,38 +262,32 @@ module sump2 #
   wire [31:0]             c_di;
   reg  [31:0]             c_di_p1;
   reg  [depth_bits-1:0]   d_addr;
-  reg  [depth_bits-1:0]   user_addr;
   reg  [31:0]             d_do;
-  reg  [31:0]             d_do_p1;
-  reg                     load_user_addr;
 
   reg  [63:0]             rle_ram_array[depth_len-1:0];
   reg  [depth_bits-1:0]   a_addr;
   reg  [depth_bits-1:0]   a_addr_p1;
-  reg  [depth_bits-1:0]   a_addr_p2;
   reg                     a_we;
   reg                     a_we_p1;
-  reg                     a_we_p2;
   reg  [63:0]             a_di;
   reg  [63:0]             a_di_p1;
-  reg  [63:0]             a_di_p2;
   reg  [depth_bits-1:0]   b_addr;
   reg  [63:0]             b_do;
-  reg  [63:0]             b_do_p1;
-
   wire [31:0]             data_en_bits;
   reg                     data_en_loc;
   reg                     data_en_loc_p1;
+
   reg  [31:0]             events_pre;
   reg  [31:0]             events_p1;
   reg  [31:0]             events_p2;
+
   reg  [31:0]             rle_time;
   reg  [31:0]             rle_time_p1;
   reg                     rle_wd_sample;
   reg                     rle_pre_jk;
-  reg                     rle_pre_jk_p1;
   reg                     rle_done_jk;
-  reg                     rle_done_jk_p1;
+  reg                     rle_done_loc;
+  reg                     rle_pre_done_loc;
   wire [7:0]              data_4x_dwords;
 
 
@@ -276,9 +296,17 @@ module sump2 #
   assign reset_loc = reset;
 
  
-  assign cap_status = { rle_en, 1'b0, rle_done_jk_p1, ~rle_pre_jk_p1,
-             complete_jk_p1, acquired_jk_p1, triggered_jk_p1, armed_jk_p1 }; 
+//assign cap_status = { rle_en, 1'b0, rle_done_loc, ~rle_pre_jk,
+  assign cap_status = { rle_en, 1'b0, rle_done_loc, rle_pre_done_loc,
+                        complete_jk, acquired_jk, triggered_jk, armed_jk }; 
 
+//-----------------------------------------------------------------------------
+// Flop the input events and support reduction for much smaller designs.
+//-----------------------------------------------------------------------------
+always @ ( posedge clk_cap ) begin : proc_done
+  rle_done_loc     <= rle_done_jk && ( deep_sump_en==0 || ds_rle_post_done==1);
+  rle_pre_done_loc <= ~rle_pre_jk && ( deep_sump_en==0 || ds_rle_pre_done==1);
+end // proc_din
 
 //-----------------------------------------------------------------------------
 // Flop the input events and support reduction for much smaller designs.
@@ -308,7 +336,7 @@ end // proc_din
 // Note: Software Must go from Idle to Arm to clear the JKs.
 //-----------------------------------------------------------------------------
 always @ ( * ) begin : proc_data_en
-  if ( data_en_bits == 32'h00000000 ||
+  if ( data_en_bits == 32'h00000000 || data_en == 0 ||
        ( data_en_bits[31:0] & events_din[31:0] ) != 32'h00000000 ) begin
     data_en_loc <= 1;// Capture sample in time 
   end else begin
@@ -363,16 +391,16 @@ end // proc_trig
 // Note: Software Must go from Idle to Arm to clear the JKs.
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_cap ) begin : proc_cap  
-  c_we        <= 0;
-  trigger_out <= 0;
-  trigger_loc <= 0;
-  trigger_wd  <= 0;
-  active      <= 0;
-  trigger_nth_p1   <= trigger_nth[15:0];
-  trigger_delay_p1 <= trigger_delay[15:0];
+  c_we            <= 0;
+  trigger_out     <= 0;
+  trigger_loc     <= 0;
+  trigger_wd      <= 0;
+  active          <= 0;
+  ds_trigger      <= 0;
+  ds_events       <= events_p1[31:0];
 
   // CMD_ARM   
-  if ( ctrl_cmd_p1  == 5'h01 ) begin
+  if ( ctrl_cmd_loc == 6'h01 ) begin
     active <= 1;
 
     // Watchdog gets armed on 1st kick. Every kick after clears count.
@@ -421,16 +449,20 @@ always @ ( posedge clk_cap ) begin : proc_cap
         end
       end
 
+
       // Don't allow trigger until pre-trig buffer is full
-      if ( complete_jk == 1 ) begin
-        if ( ( trigger_dly_cnt == trigger_delay_p1[15:0] ) || 
+      // If there is a deep_sump block, wait for it as well.
+//    if ( complete_jk == 1 ) begin
+      if ( complete_jk == 1 && ( deep_sump_en==0 || ds_rle_pre_done==1) ) begin
+        if ( ( trigger_dly_cnt == trigger_delay[15:0] ) || 
              (  trigger_dly_en==0 && trigger_loc == 1 ) ) begin
           trigger_dly_cnt <= 16'hFFFF;
-          if ( trigger_cnt==trigger_nth_p1[15:0] || trigger_nth_en==0 ) begin
+          if ( trigger_cnt == trigger_nth[15:0] || trigger_nth_en==0 ) begin
             armed_jk     <= 0;
             trigger_ptr  <= c_addr[depth_bits-1:0];
             trigger_out  <= 1;
             triggered_jk <= 1;
+            ds_trigger   <= 1;
           end
           trigger_cnt <= trigger_cnt + 1;
         end
@@ -457,7 +489,7 @@ always @ ( posedge clk_cap ) begin : proc_cap
     end
 
   // CMD_RESET
-  end else if ( ctrl_cmd_p1  == 5'h02 ) begin
+  end else if ( ctrl_cmd_loc == 6'h02 ) begin
     c_addr             <= zeros[depth_bits-1:0];
     post_trig_cnt      <= zeros[depth_bits-1:0];
     post_trig_cnt[1:0] <= 2'b11;// Subtracts 3 from trigger_pos for alignment
@@ -473,41 +505,14 @@ always @ ( posedge clk_cap ) begin : proc_cap
   // Cleanly xfer clock domains
   xfer_clr <= 0;
   if ( ctrl_cmd_xfer == 1 ) begin
-    ctrl_cmd_loc <= ctrl_cmd[4:0];
+    ctrl_cmd_loc <= ctrl_cmd[5:0];
     xfer_clr     <= 1;
   end
-  ctrl_cmd_p1 <= ctrl_cmd_loc[4:0];
-  complete_jk_p1  <= complete_jk;
-  acquired_jk_p1  <= acquired_jk;
-  triggered_jk_p1 <= triggered_jk;
-  armed_jk_p1     <= armed_jk;
+  
+  ds_cmd_cap <= ctrl_cmd_loc[5:0];
+
 end // proc_cap
   assign c_di = events_loc[31:0];
-
-
-//-----------------------------------------------------------------------------
-// led_bus : Spins while waiting for trigger event. 2 Solids when done.
-//-----------------------------------------------------------------------------
-always @ ( posedge clk_cap ) begin : proc_led_bus
-  if ( rle_done_jk_p1 == 0 ) begin
-    led_bus <= 4'b0000;
-  end
-  if ( ctrl_cmd_p1  == 5'h01 ) begin
-    if ( rle_time[24] == 0 ) begin
-      if ( triggered_jk == 1 ) begin
-        led_bus <= 4'b0011;// Triggered but not complete
-      end else begin
-        led_bus <= 4'b0001;// Waiting for trigger
-      end
-    end
-    if ( triggered_jk == 1 ) begin
-      led_bus[0] <= 1;// Solid after trigger 
-    end
-  end
-  if ( rle_done_jk_p1 == 1 ) begin
-    led_bus <= 4'b0011;// Completion goes solid
-  end
-end // proc_led_bus
 
 
 //-----------------------------------------------------------------------------
@@ -521,21 +526,18 @@ always @ ( posedge clk_cap ) begin : proc_rle
   rle_time_p1 <= rle_time[31:0];
   // Prevent RLE from hanging in cases where no activity happens after the
   // trigger event by storing a non-changing sample periodically every
-  // 2^24 clock cycles about 100ms at 100 MHz 
-  // 2^20 clock cycles about 10ms at 100 MHz x 1024 RAM = 10Sec
-  // rle_wd_sample  <= rle_time[23] & ~ rle_time_p1[23];
-  //rle_wd_sample  <= rle_time[19] & ~ rle_time_p1[19];// About 5sec
-  rle_wd_sample  <= rle_time[22] & ~ rle_time_p1[22];// 
+  // 2^24 clock cycles ( about 100ms at 100 MHz )
+  rle_wd_sample  <= rle_time[15] & ~ rle_time_p1[15];
 
   // CMD_ARM   
-  if ( ctrl_cmd_p1  == 5'h01 ) begin
+  if ( ctrl_cmd_loc == 6'h01 ) begin
     rle_time <= rle_time[31:0] + 1;
     if ( triggered_jk == 0 ) begin
       a_addr[depth_bits-1] <= 0;// Pre-Trigger Half
       // If the prebuffer is invalid, store everything, change or no change
       // as to immediately fill up RAM with valid samples
       // Once prebuffer is valid, only store event deltas ( RLE )
-      if ( rle_pre_jk == 1 || rle_wd_sample == 1 || 
+      if ( rle_pre_jk == 1 || rle_wd_sample == 1 ||
            ( events_p1 != events_p2[31:0] ) ) begin
         a_we <= 1;
         a_addr[depth_bits-2:0] <= a_addr[depth_bits-2:0] + 1; 
@@ -562,7 +564,7 @@ always @ ( posedge clk_cap ) begin : proc_rle
     end
 
   // CMD_RESET
-  end else if ( ctrl_cmd_p1  == 5'h02 ) begin
+  end else if ( ctrl_cmd_loc == 6'h02 ) begin
     rle_time    <= 32'd0;// 43 seconds at 100 MHz
     a_addr      <= zeros[depth_bits-1:0];
     rle_pre_jk  <= 1;
@@ -570,42 +572,74 @@ always @ ( posedge clk_cap ) begin : proc_rle
   end
   a_di[31:0]  <= events_p1[31:0];
   a_di[63:32] <= rle_time[31:0];
-  rle_done_jk_p1 <= rle_done_jk;
-  rle_pre_jk_p1  <= rle_pre_jk;
 end // proc_rle
-//assign a_di[31:0]  = events_p1[31:0];
-//assign a_di[63:32] = rle_time[31:0];
+
+
+//-----------------------------------------------------------------------------
+// Create write/read bus interface to the sump2_deep block
+//   0x18 : Read Deep-RAM Width+Length
+//   0x19 : Read Deep-RAM Trigger Location + Status
+//   0x1a : Read Deep-RAM Data ( address auto incrementing )
+//   0x1b : Load Deep-RAM Read Pointer
+//   0x1c : Load Deep-RAM Read Page
+//   0x1d : Load Deep-Sump User Control
+//   0x1e : Load Deep-Sump User Mask     
+//   0x1f : Load Deep-Sump User Config   
+// Note: ds_user_ctrl is decoded locally here as it may be used to switch 
+//       between multiple deep_sump.v instances, for example one may use fast
+//       on chip BRAM and another might use slower external DRAM. A user may
+//       decide to mux between the two with a ds_user_ctrl bit.
+//-----------------------------------------------------------------------------
+always @ ( posedge clk_lb ) begin : proc_lb_ds
+  ds_wr_req <= 0;
+  ds_rd_req <= 0;
+  if ( lb_wr == 1 && lb_cs_data == 1 ) begin
+    if ( ctrl_cmd[5:0] == 6'h1b ||
+         ctrl_cmd[5:0] == 6'h1c ||
+         ctrl_cmd[5:0] == 6'h1e ||
+         ctrl_cmd[5:0] == 6'h1f    ) begin
+      ds_wr_req <= 1;
+      ds_wr_d   <= lb_wr_d[31:0];
+    end
+  end
+  if ( lb_rd == 1 && lb_cs_data == 1 ) begin
+    if ( ctrl_cmd[5:0] == 6'h18 ||
+         ctrl_cmd[5:0] == 6'h19 ||
+         ctrl_cmd[5:0] == 6'h1a    ) begin
+      ds_rd_req <= 1;
+    end
+  end
+end
 
 
 //-----------------------------------------------------------------------------
 // LocalBus Write Ctrl register
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_lb ) begin : proc_lb_wr
-  ctrl_cmd_q <= ctrl_cmd[4:0];
-  ctrl_13_reg_p1 <= ctrl_13_reg[31:0];
-
+  ds_cmd_lb <= ctrl_reg[5:0];
   if ( lb_wr == 1 && lb_cs_ctrl == 1 ) begin
-    ctrl_reg[4:0] <= lb_wr_d[4:0];
+    ctrl_reg[5:0] <= lb_wr_d[5:0];
     ctrl_cmd_xfer <= 1;
   end 
 
   if ( lb_wr == 1 && lb_cs_data == 1 ) begin
-    case( ctrl_cmd[4:0] )
-      5'h04 : ctrl_04_reg <= lb_wr_d[31:0];
-      5'h05 : ctrl_05_reg <= lb_wr_d[31:0];
-      5'h06 : ctrl_06_reg <= lb_wr_d[31:0];
-      5'h07 : ctrl_07_reg <= lb_wr_d[31:0];
+    case( ctrl_cmd[5:0] )
+      6'h04 : ctrl_04_reg <= lb_wr_d[31:0];
+      6'h05 : ctrl_05_reg <= lb_wr_d[31:0];
+      6'h06 : ctrl_06_reg <= lb_wr_d[31:0];
+      6'h07 : ctrl_07_reg <= lb_wr_d[31:0];
 
-      5'h08 : ctrl_08_reg <= lb_wr_d[31:0];
-      5'h09 : ctrl_09_reg <= lb_wr_d[31:0];
-      5'h0A : ctrl_0a_reg <= lb_wr_d[31:0];
-      5'h0B : ctrl_0b_reg <= lb_wr_d[31:0];
+      6'h08 : ctrl_08_reg <= lb_wr_d[31:0];
+      6'h09 : ctrl_09_reg <= lb_wr_d[31:0];
+      6'h0A : ctrl_0a_reg <= lb_wr_d[31:0];
+      6'h0B : ctrl_0b_reg <= lb_wr_d[31:0];
 
-      5'h10 : ctrl_10_reg <= lb_wr_d[31:0];
-      5'h11 : ctrl_11_reg <= lb_wr_d[31:0];
-      5'h12 : ctrl_12_reg <= lb_wr_d[31:0];
-      5'h13 : ctrl_13_reg <= lb_wr_d[31:0];
-      5'h14 : ctrl_14_reg <= lb_wr_d[31:0];
+      6'h10 : ctrl_10_reg <= lb_wr_d[31:0];
+      6'h11 : ctrl_11_reg <= lb_wr_d[31:0];
+      6'h12 : ctrl_12_reg <= lb_wr_d[31:0];
+      6'h13 : ctrl_13_reg <= lb_wr_d[31:0];
+      6'h14 : ctrl_14_reg <= lb_wr_d[31:0];
+      6'h1d : ctrl_1d_reg <= lb_wr_d[31:0];
     endcase
   end
 
@@ -613,56 +647,44 @@ always @ ( posedge clk_lb ) begin : proc_lb_wr
     ctrl_cmd_xfer  <= 0;
   end
 
-  if ( ctrl_cmd_q == 5'h01 ) begin
-//  d_addr  <= c_addr[depth_bits-1:0];// When Acq stops, d_addr will be last 
-    d_addr  <= c_addr_p1[depth_bits-1:0];// When Acq stops, d_addr will be last 
+  if ( ctrl_cmd == 6'h01 ) begin
+    d_addr  <= c_addr[depth_bits-1:0];// When Acq stops, d_addr will be last 
   end
-
-//if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd_q == 5'h09 ) begin
-//  d_addr <= lb_wr_d[depth_bits-1:0];// Load user specified address
-//end 
-
-  load_user_addr <= 0;
-  if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd_q == 5'h09 ) begin
-    user_addr      <= lb_wr_d[depth_bits-1:0];// Load user specified address
-    load_user_addr <= 1;
+  if ( lb_wr == 1 && lb_cs_data == 1 && ctrl_cmd == 6'h09 ) begin
+    d_addr <= lb_wr_d[depth_bits-1:0];// Load user specified address
   end 
-  if ( load_user_addr == 1 ) begin
-    d_addr <= user_addr[depth_bits-1:0];// Load user specified address
-  end
-
   if ( rd_inc == 1 ) begin
     d_addr  <= d_addr[depth_bits-1:0] + 1;// Auto Increment on each read
   end 
 
   if ( reset_loc == 1 ) begin
-    ctrl_reg[4:0] <= 5'd0;
+    ctrl_reg[5:0] <= 6'd0;
     ctrl_cmd_xfer <= 1;// Flag to xfer ctrl_reg into other clock domain
   end 
 end
 
-  assign ctrl_cmd[4:0]     = ctrl_reg[4:0];
+  assign ctrl_cmd[5:0]      = ctrl_reg[5:0];
 
-  assign trigger_type      = ctrl_04_reg[3:0];
-  assign trigger_bits      = ctrl_05_reg[31:0];
-  assign trigger_nth       = ctrl_06_reg[15:0];
-  assign trigger_delay     = ctrl_06_reg[31:16];
-  assign trigger_pos       = ctrl_07_reg[31:0];
-  assign rle_event_en      = ctrl_08_reg[31:0];
+  assign trigger_type       = ctrl_04_reg[3:0];
+  assign trigger_bits       = ctrl_05_reg[31:0];
+  assign trigger_nth        = ctrl_06_reg[15:0];
+  assign trigger_delay      = ctrl_06_reg[31:16];
+  assign trigger_pos        = ctrl_07_reg[31:0];
+  assign rle_event_en       = ctrl_08_reg[31:0];
 
-  assign user_ctrl[31:0]   = ctrl_10_reg[31:0];
-  assign user_pat0[31:0]   = ctrl_11_reg[31:0];
-  assign user_pat1[31:0]   = ctrl_12_reg[31:0];
-  assign pat0[31:0]        = ctrl_11_reg[31:0];
-  assign pat1[31:0]        = ctrl_12_reg[31:0];
-  assign data_en_bits[31:0] = ctrl_13_reg_p1[31:0];
+  assign user_ctrl[31:0]    = ctrl_10_reg[31:0];
+  assign user_pat0[31:0]    = ctrl_11_reg[31:0];
+  assign user_pat1[31:0]    = ctrl_12_reg[31:0];
+  assign pat0[31:0]         = ctrl_11_reg[31:0];
+  assign pat1[31:0]         = ctrl_12_reg[31:0];
+  assign data_en_bits[31:0] = ctrl_13_reg[31:0];
   assign watchdog_reg[31:0] = ctrl_14_reg[31:0];
+  assign ds_user_ctrl[31:0] = ctrl_1d_reg[31:0];
 
   assign ctrl_rd_ptr[15:0] = ctrl_09_reg[15:0];
   assign ctrl_rd_page[4:0] = ctrl_0a_reg[4:0];
 
   assign data_4x_dwords = data_dwords;
-
 
 //-----------------------------------------------------------------------------
 // LocalBus readback of ctrl_reg and data_reg
@@ -671,88 +693,87 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
   lb_rd_d   <= 32'd0;
   lb_rd_rdy <= 0;
   rd_inc    <= 0;
-  ctrl_rd_page_p1 <= ctrl_rd_page[4:0];
 
   if ( lb_rd == 1 && lb_cs_ctrl == 1 ) begin
-    lb_rd_d[4:0] <= ctrl_reg[4:0];
+    lb_rd_d[5:0] <= ctrl_reg[5:0];
     lb_rd_rdy    <= 1;
   end 
 
-  if ( lb_rd == 1 && lb_cs_data == 1 ) begin
+  if ( ds_rd_rdy == 1 && deep_sump_en == 1 ) begin
+    lb_rd_d   <= ds_rd_d[31:0];
     lb_rd_rdy <= 1;
-    if ( ctrl_cmd_q == 5'h00 ||
-         ctrl_cmd_q == 5'h01    
+  end 
+
+  if ( lb_rd == 1 && lb_cs_data == 1 ) begin
+    if ( ctrl_cmd == 6'h00 ||
+         ctrl_cmd == 6'h01    
        ) begin
       lb_rd_d[7:0] <= cap_status[7:0];
+      lb_rd_rdy    <= 1;
     end
-    if ( ctrl_cmd_q == 5'h0b ) begin
+    if ( ctrl_cmd == 6'h0b ) begin
       lb_rd_d[31:16] <= sump_id;// Identification
       lb_rd_d[15:8]  <= sump_rev;// Revision
-      lb_rd_d[7:5]   <= 3'd0;
+      lb_rd_d[7]     <= deep_sump_en;
+      lb_rd_d[6]     <= data_en;
+      lb_rd_d[5]     <= trigger_wd_en;
       lb_rd_d[4]     <= ~ nonrle_en;// Invert to disable backwards SW comptbl
       lb_rd_d[3]     <= rle_en;
       lb_rd_d[2]     <= pattern_en;
       lb_rd_d[1]     <= trigger_nth_en;
       lb_rd_d[0]     <= trigger_dly_en;
+      lb_rd_rdy      <= 1;
     end
-    if ( ctrl_cmd_q == 5'h0c ) begin
+    if ( ctrl_cmd == 6'h0c ) begin
       lb_rd_d[31:28] <= rle_en     ;// 1 if RLE RAM exists
       lb_rd_d[27:24] <= event_bytes;// How Many Event Bytes 1-4
       lb_rd_d[23:16] <= data_4x_dwords[5:2];// How Many 32bit BRAMs data 4x 
       lb_rd_d[15:0]  <= depth_len;  // How deep RAMs are
+      lb_rd_rdy      <= 1;
     end
-    if ( ctrl_cmd_q == 5'h0d ) begin
+    if ( ctrl_cmd == 6'h0d ) begin
       lb_rd_d[15:0]  <= freq_fracts;// Fractional MHz bits 1/2,1/4,etc.
       lb_rd_d[31:16] <= freq_mhz   ;// Integer MHz
+      lb_rd_rdy      <= 1;
     end
-    if ( ctrl_cmd_q == 5'h0e ) begin
+    if ( ctrl_cmd == 6'h0e ) begin
       lb_rd_d[depth_bits-1:0] <= trigger_ptr[depth_bits-1:0];// Where Trig Is
+      lb_rd_rdy      <= 1;
     end
-    if ( ctrl_cmd_q == 5'h0f ) begin
-      lb_rd_d <= ram_rd_d[31:0];
-      rd_inc  <= 1;// Auto Increment RAM Address
+    if ( ctrl_cmd == 6'h0f ) begin
+      lb_rd_d        <= ram_rd_d[31:0];
+      rd_inc         <= 1;// Auto Increment RAM Address
+      lb_rd_rdy      <= 1;
     end
   end 
 
-  if ( data_dwords != 0 ) begin
-    // Mux between the BRAMs
-    case( ctrl_rd_page_p1[4:0] )
-      5'H02   : ram_rd_d <= b_do[31:0];   // RLE Data
-      5'H03   : ram_rd_d <= b_do[63:32];  // RLE Time
+  // Mux between the BRAMs
+  case( ctrl_rd_page[4:0] )
+    5'H02   : ram_rd_d <= b_do[31:0];   // RLE Data
+    5'H03   : ram_rd_d <= b_do[63:32];  // RLE Time
 
-      5'H10   : ram_rd_d <= dwords_3_0_do[31:0];
-      5'H11   : ram_rd_d <= dwords_3_0_do[63:32];
-      5'H12   : ram_rd_d <= dwords_3_0_do[95:64];
-      5'H13   : ram_rd_d <= dwords_3_0_do[127:96];
+    5'H10   : ram_rd_d <= dwords_3_0_do[31:0];
+    5'H11   : ram_rd_d <= dwords_3_0_do[63:32];
+    5'H12   : ram_rd_d <= dwords_3_0_do[95:64];
+    5'H13   : ram_rd_d <= dwords_3_0_do[127:96];
 
-      5'H14   : ram_rd_d <= dwords_7_4_do[31:0];
-      5'H15   : ram_rd_d <= dwords_7_4_do[63:32];
-      5'H16   : ram_rd_d <= dwords_7_4_do[95:64];
-      5'H17   : ram_rd_d <= dwords_7_4_do[127:96];
+    5'H14   : ram_rd_d <= dwords_7_4_do[31:0];
+    5'H15   : ram_rd_d <= dwords_7_4_do[63:32];
+    5'H16   : ram_rd_d <= dwords_7_4_do[95:64];
+    5'H17   : ram_rd_d <= dwords_7_4_do[127:96];
 
-      5'H18   : ram_rd_d <= dwords_11_8_do[31:0];
-      5'H19   : ram_rd_d <= dwords_11_8_do[63:32];
-      5'H1a   : ram_rd_d <= dwords_11_8_do[95:64];
-      5'H1b   : ram_rd_d <= dwords_11_8_do[127:96];
+    5'H18   : ram_rd_d <= dwords_11_8_do[31:0];
+    5'H19   : ram_rd_d <= dwords_11_8_do[63:32];
+    5'H1a   : ram_rd_d <= dwords_11_8_do[95:64];
+    5'H1b   : ram_rd_d <= dwords_11_8_do[127:96];
 
-      5'H1c   : ram_rd_d <= dwords_15_12_do[31:0];
-      5'H1d   : ram_rd_d <= dwords_15_12_do[63:32];
-      5'H1e   : ram_rd_d <= dwords_15_12_do[95:64];
-      5'H1f   : ram_rd_d <= dwords_15_12_do[127:96];
+    5'H1c   : ram_rd_d <= dwords_15_12_do[31:0];
+    5'H1d   : ram_rd_d <= dwords_15_12_do[63:32];
+    5'H1e   : ram_rd_d <= dwords_15_12_do[95:64];
+    5'H1f   : ram_rd_d <= dwords_15_12_do[127:96];
 
-      default : ram_rd_d <= d_do[31:0];    // Events
-    endcase
-  end else begin
-    // Mux between the BRAMs
-    case( ctrl_rd_page_p1[4:0] )
-//    5'H02   : ram_rd_d <= b_do[31:0]; // RLE Data
-//    5'H03   : ram_rd_d <= b_do[63:32];// RLE Time
-//    default : ram_rd_d <= d_do[31:0]; // Events
-      5'H02   : ram_rd_d <= b_do_p1[31:0];   // RLE Data
-      5'H03   : ram_rd_d <= b_do_p1[63:32];  // RLE Time
-      default : ram_rd_d <= d_do_p1[31:0];   // non-RLE Events
-    endcase
-  end 
+    default : ram_rd_d <= d_do[31:0];    // Events
+  endcase
 
 end // proc_lb_rd
 
@@ -805,10 +826,6 @@ always @( posedge clk_lb )
 begin
   if ( nonrle_en == 1 ) begin
     d_do    <= event_ram_array[d_addr] ;
-    d_do_p1 <= d_do;
-  end else begin
-    d_do    <= 32'd0;
-    d_do_p1 <= 32'd0;
   end
 
   if ( data_dwords >= 4 ) begin
@@ -834,19 +851,12 @@ begin
   if ( rle_en == 1 ) begin
     a_we_p1   <= a_we;
     a_addr_p1 <= a_addr;
+    a_we_p1   <= a_we;
+    a_addr_p1 <= a_addr;
     a_di_p1   <= a_di;
-    a_we_p2   <= a_we_p1;
-    a_addr_p2 <= a_addr_p1;
-    a_di_p2   <= a_di_p1;
-    if ( a_we_p2 ) begin
-      rle_ram_array[a_addr_p2] <= a_di_p2;
+    if ( a_we_p1 ) begin
+      rle_ram_array[a_addr_p1] <= a_di_p1;
     end // if ( a_we )
-//  if ( a_we_p1 ) begin
-//    rle_ram_array[a_addr_p1] <= a_di_p1;
-//  end // if ( a_we )
-//  if ( a_we    ) begin
-//    rle_ram_array[a_addr   ] <= a_di;
-//  end // if ( a_we )
   end
 end // always
 
@@ -858,7 +868,6 @@ always @( posedge clk_lb )
 begin
   if ( rle_en == 1 ) begin
     b_do <= rle_ram_array[d_addr];
-    b_do_p1 <= b_do;
   end
 end // always
 
