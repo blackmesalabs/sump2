@@ -148,6 +148,7 @@
 # 2018.05.09 khubbard   default popup self.popup_list_values. Fix strtp bug
 # 2018.05.11 khubbard   finalized DeepSump support.
 # 2018.05.11 khubbard   change to vcdfile2signal_list for Boolean conversions.
+# 2018.06.26 khubbard   Line 6216 fixed missing deep_sump sample pre-trig.
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -169,7 +170,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2018.05.15";
+  self.vers = "2018.06.26";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -2357,7 +2358,6 @@ def proc_cmd( self, cmd, parms ):
     self.last_filesave = filename_vcd;
     rts = ["save_vcd() Complete " + filename_vcd ];
 
-# HERENOW
   elif ( cmd == "save_vcd_deep" ):
     filename_vcd = make_unique_filename( self, "deep_sump_", ".vcd" );
     print("save_vcd_deep()");
@@ -5010,7 +5010,6 @@ def save_vcd_deep_org( self, filename_vcd ):
   rle_min = min( rle_time );
   rle_max = max( rle_time );
 
-  # HERENOW
 # for ( t,d ) in rle_list:
 #   print("%08x %08x" % (t,d) );
 
@@ -6213,7 +6212,8 @@ def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None ):
   # Section-2 is other half of pre-trig capture if region rolls over
   # Section-3 is all the post-trig capture
   start1 = trigger_ptr - pre_offset + 1;
-  stop1  = trigger_ptr;
+# stop1  = trigger_ptr;
+  stop1  = trigger_ptr + 1;# HERENOW
   start2 = None;
   stop2  = None;
   start3 = None;
@@ -6246,7 +6246,6 @@ def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None ):
   data += self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = len3 );
   return data;
 
-# HERENOW
 
 # if ( start2 != None ):
 #   print("%d - %d : %d - %d" % ( start1, stop1, start2, stop2 ));
@@ -6705,7 +6704,6 @@ def vcdfile2signal_list( self, file_name ):
 #       print(symb);
 #       print(num_bits);
 #       print(num_nibs);
-#HERENOW
     
       
       # Is symb in rip_list?  If not, do normal processing
