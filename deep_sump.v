@@ -46,6 +46,7 @@
 -- Ver#  When      Who      What
 -- ----  --------  -------- --------------------------------------------------
 -- 0.1   05.01.18  khubbard Creation
+-- 0.11  08.22.18  khubbard fix for trigger_ptr store. Data dependent bug.
 -- ***************************************************************************/
 `default_nettype none // Strictly enforce all nets to be declared
 
@@ -89,6 +90,7 @@ module deep_sump #
   wire [31:0]             ds_user_mask;
   reg  [5:0]              ctrl_cmd_lb;
   reg  [5:0]              ctrl_cmd_loc;
+  reg  [5:0]              ctrl_cmd_loc_p1;
   wire [4:0]              ctrl_rd_page;
   reg                     rd_ptr_inc;
   reg                     rd_ptr_load;
@@ -111,6 +113,7 @@ module deep_sump #
   reg                     rle_pre_jk;
   reg                     rle_done_jk;
   reg                     overrun_err_jk;
+  reg  [7:0]              erase_cnt;
 
 
   assign zeros = 32'd0;
@@ -122,6 +125,7 @@ module deep_sump #
 //-----------------------------------------------------------------------------
 always @ ( posedge clk_cap ) begin : proc_in   
   ctrl_cmd_loc <= ds_cmd_cap[5:0];
+  ctrl_cmd_loc_p1 <= ctrl_cmd_loc[5:0];
   events_p1    <= ds_events[31:0] & ~ ds_user_mask[31:0];
   events_p2    <= events_p1[31:0];
 end // proc_in
@@ -136,6 +140,9 @@ end // proc_in
 always @ ( posedge clk_cap ) begin : proc_rle  
   a_we        <= 0;
   rle_time_p1 <= rle_time[31:0];
+  a_di[31:0]  <= events_p1[31:0];
+  a_di[63:32] <= rle_time[31:0];
+
   // Prevent RLE from hanging in cases where no activity happens after the
   // trigger event by storing a non-changing sample periodically every
   // This value is a fine balance between limiting the max possible acquisition
@@ -239,24 +246,44 @@ always @ ( posedge clk_cap ) begin : proc_rle
 
     if ( rle_pre_jk == 0 && ds_trigger == 1 && triggered_jk == 0 ) begin
       triggered_jk <= 1;
-      trigger_ptr  <= a_addr[depth_bits-1:0];
+//    trigger_ptr  <= a_addr[depth_bits-1:0];
     end
+
+    if ( a_we == 1 && a_addr[depth_bits-1] == 0 ) begin
+      trigger_ptr  <= a_addr[depth_bits-1:0];// Last pre-trig loc written
+    end
+
 
   // CMD_RESET
   end else if ( ctrl_cmd_loc == 6'h02 ) begin
     overrun_err_jk <= 0;
     rle_time       <= 32'd0;// 43 seconds at 100 MHz
-    a_addr         <= zeros[depth_bits-1:0];
+//  a_addr         <= zeros[depth_bits-1:0];
     rle_pre_jk     <= 1;
     rle_done_jk    <= 0;
     rle_wd_jk      <= 0;
     rle_wd_cnt     <= 8'd0;
     triggered_jk   <= 0;
+    erase_cnt      <= erase_cnt[7:0] + 1;
+    a_di[31:0]     <= 32'hA5A5A5A5;
+    a_di[63:32]    <= 32'hA5A5A5A5;
+    if ( erase_cnt == 8'd0 ) begin
+      a_we   <= 1;
+      a_addr <= a_addr[depth_bits-1:0] + 1;
+    end 
   end
-  a_di[31:0]  <= events_p1[31:0];
-  a_di[63:32] <= rle_time[31:0];
+
+  if ( ctrl_cmd_loc != 6'h02 && ctrl_cmd_loc_p1 == 6'h02 ) begin
+    a_addr         <= zeros[depth_bits-1:0];
+  end
+
+
   ds_rle_pre_done  <= ~ rle_pre_jk;
   ds_rle_post_done <=   rle_done_jk;
+
+  if ( reset == 1 ) begin
+    a_we <= 0;
+  end
 end // proc_rle
 
 
@@ -320,6 +347,9 @@ always @ ( posedge clk_lb ) begin : proc_lb_rd
   if ( rd_ptr_load == 1 ) begin 
     b_addr   <= ctrl_1b_reg[depth_bits-1:0];
     b_rd_req <= 1;
+  end 
+  if ( reset == 1 ) begin
+    b_rd_req <= 0;
   end 
 
   // Mux between the RLE timestamp and RLE event samples
