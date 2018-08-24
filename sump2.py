@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # sump2
-#               Copyright (c) 2018 Kevin M. Hubbard BlackMesaLabs
+#               Copyright (c) 2018 Kevin M. Hubbard Black Mesa Labs
 #
 # This program is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free Software
@@ -149,6 +149,11 @@
 # 2018.05.11 khubbard   finalized DeepSump support.
 # 2018.05.11 khubbard   change to vcdfile2signal_list for Boolean conversions.
 # 2018.06.26 khubbard   Line 6216 fixed missing deep_sump sample pre-trig.
+# 2018.08.20 khubbard   Backed out 6216 fix as seemed to brank pre-trig.
+# 2018.08.20 khubbard   Line 6231 +1 fix for start1 and stop2 
+# 2018.08.22 khubbard   rewrote sump_dump_deep_ram() to fix unfurling bug.
+# 2018.08.22 khubbard   Line 5600, zero out hidden signals after capture. 
+# 2018.08.24 khubbard   DeepSump menu change for partial downloads.       
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -170,7 +175,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2018.06.26";
+  self.vers = "2018.08.24";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -2358,7 +2363,25 @@ def proc_cmd( self, cmd, parms ):
     self.last_filesave = filename_vcd;
     rts = ["save_vcd() Complete " + filename_vcd ];
 
-  elif ( cmd == "save_vcd_deep" ):
+# HERE
+# elif ( cmd == "save_vcd_deep" ):
+  elif ( cmd == "save_vcd_deep"   or 
+         cmd == "save_vcd_01:01"   or 
+         cmd == "save_vcd_01:05"   or 
+         cmd == "save_vcd_05:01"   or 
+         cmd == "save_vcd_05:05"   or 
+         cmd == "save_vcd_05:50"   or 
+         cmd == "save_vcd_50:05"   or 
+         cmd == "save_vcd_50:50"  ): 
+    if   ( cmd == "save_vcd_01:01" ): pre_trig = 2;   post_trig = 2;
+    elif ( cmd == "save_vcd_01:05" ): pre_trig = 2;   post_trig = 10;
+    elif ( cmd == "save_vcd_05:01" ): pre_trig = 10;  post_trig = 2;
+    elif ( cmd == "save_vcd_05:05" ): pre_trig = 10;  post_trig = 10;
+    elif ( cmd == "save_vcd_05:50" ): pre_trig = 10;  post_trig = 100;
+    elif ( cmd == "save_vcd_50:05" ): pre_trig = 100; post_trig = 10;
+    elif ( cmd == "save_vcd_50:50" ): pre_trig = 100; post_trig = 10;
+    else:                             pre_trig = 0;   post_trig = 0;
+
     filename_vcd = make_unique_filename( self, "deep_sump_", ".vcd" );
     print("save_vcd_deep()");
     if ( self.sump.cfg_dict['deep_sump_en'] == 1 ):
@@ -2369,9 +2392,12 @@ def proc_cmd( self, cmd, parms ):
         self.sump.ds_status_triggered | \
         self.sump.ds_status_rle_pre;
       if ( ds_status == good_state ):
-        save_vcd_deep( self, filename_vcd );
+        start_time = time.time();
+        save_vcd_deep( self, filename_vcd, pre_trig, post_trig );
+        stop_time = time.time();
         screen_flip( self );# Only thing changing is the popup selection
         draw_header( self,"save_vcd_deep() Complete " + filename_vcd );
+        print( "DeepSump download time %.1f Seconds " % ( stop_time-start_time) );
         print( "save_vcd_deep() Complete " + filename_vcd );
         from shutil import copyfile;
         copyfile( filename_vcd, "deep_sump.vcd" );
@@ -4922,9 +4948,9 @@ def add_wave( self, words ):
 # Potentially this will be really large, create a nice divide between sump2.py
 # gui and work of generating VCD file. Potentially this can be spawned off
 # to a separate native program if needed for performance.
-def save_vcd_deep( self, filename_vcd ):
+def save_vcd_deep( self, filename_vcd, pre_trig, post_trig ):
   # Grab the Deep Sump data from Memory
-  rle_list = sump_dump_deep_data( self );
+  rle_list = sump_dump_deep_data( self, pre_trig, post_trig );
   tuplelist2file( self, "deep_sump_raw.txt", rle_list );
 
   freq_mhz = self.sump.cfg_dict['frequency'];
@@ -5592,6 +5618,9 @@ def sump_dump_data( self ):
         else:
 #         bit = "0";
           bit = False;# VV
+        # Prevent retention of old values for a newly hidden signal
+        if ( my_signal.hidden == True ):
+          bit = False;# 2018.08.22
         my_signal.values.append( bit );
 
   # DWORD Signals
@@ -5658,12 +5687,14 @@ def sump_bundle_data( self ):
   return;
 
 #########################################################################
-# Dump DeepSump data from RAM
-def sump_dump_deep_data( self ):
+# Dump DeepSump data from RAM, 1st the RLE Time, then Data, then Zip together
+def sump_dump_deep_data( self, pre_trig, post_trig ):
   print("sump_dump_deep_ram( rle_data )");
-  rle_data = sump_dump_deep_ram(self,rd_page = 0x0, rd_ptr = 0x0000 );
+  rle_data = sump_dump_deep_ram(self,rd_page=0x0,rd_ptr=0x0000,
+                                pre_trig=pre_trig,post_trig=post_trig);
   print("sump_dump_deep_ram( rle_time )");
-  rle_time = sump_dump_deep_ram(self,rd_page = 0x1, rd_ptr = 0x0000 );
+  rle_time = sump_dump_deep_ram(self,rd_page=0x1,rd_ptr=0x0000,
+                                pre_trig=pre_trig,post_trig=post_trig);
   rle_list = list(zip( rle_time, rle_data ));
   return rle_list;
 
@@ -6187,50 +6218,69 @@ def sump_dump_ram( self, rd_page = 0, rd_ptr = None ):
   return data;
 
 
+
 ########################################################
 # Return a complete list of acquired SUMP deep capture data      
-def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None ):
-# ram_len    = self.sump.cfg_dict['deep_ram_len'];
-# self.sump.wr( self.sump.cmd_wr_ds_ram_page, rd_page );
-# if ( rd_ptr != None ):
-#   self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , rd_ptr );# 
-# data = self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = ram_len );
-# return data;
+def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None, pre_trig=0,post_trig=0 ):
+
+# self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , 0 );# 
+# self.sump.wr( self.sump.cmd_wr_ds_ram_page, 0 );
+# rle_data = self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = 256 );
+# self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , 0 );# 
+# self.sump.wr( self.sump.cmd_wr_ds_ram_page, 1 );
+# rle_time = self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = 256 );
+# rle_list = list(zip( rle_time, rle_data ));
+# for each in rle_list:
+#   print("%08x %08x" % each );
 
   ram_len    = self.sump.cfg_dict['deep_ram_len'];
+  print("Detected %dx64 of DeepSump memory" % ram_len );
   trigger_ptr = 0x0FFFFFFF & self.sump.rd( self.sump.cmd_rd_ds_trig_status )[0];
-  pre_trig_percent  = int( self.vars["deep_sump_pre_trig_percent"], 10 );
-  post_trig_percent = int( self.vars["deep_sump_post_trig_percent"], 10 );
+  if ( pre_trig == 0 or post_trig == 0 ):
+    pre_trig_percent  = int( self.vars["deep_sump_pre_trig_percent"], 10 );
+    post_trig_percent = int( self.vars["deep_sump_post_trig_percent"], 10 );
+  else:
+    pre_trig_percent  = pre_trig;
+    post_trig_percent = post_trig;
+
   self.sump.wr( self.sump.cmd_wr_ds_ram_page, rd_page );
+
+  print("Trigger_Ptr = %d " % trigger_ptr );
+# pre_trig_percent  = 100;
+# post_trig_percent = 100;
 
   half_len = ram_len // 2;# Half the RAM is pre-Trig, other is post-Trig
 
   pre_offset  = int( ( half_len * pre_trig_percent ) / 100.0 );
   post_offset = int( ( half_len * post_trig_percent ) / 100.0 );
 
-  # Section-1 is either half or all of pre-trig capture.
-  # Section-2 is other half of pre-trig capture if region rolls over
-  # Section-3 is all the post-trig capture
-  start1 = trigger_ptr - pre_offset + 1;
-# stop1  = trigger_ptr;
-  stop1  = trigger_ptr + 1;# HERENOW
-  start2 = None;
-  stop2  = None;
-  start3 = None;
-  stop3  = None;
+  pre_offset  -= 2;# 100% has 2 sample issue, this hack fixes that bug
 
-  if ( start1 < 0 ):
-    start2  = 0;
-    stop2   = stop1;
-    start1 += half_len;
-    stop1   = half_len - 1;
-  else:
-    if ( stop1 > half_len-1 ):
-      start2 = 0;
-      stop2  = stop1 - ( half_len - 1 );
-      stop1  = half_len-1;
   start3 = half_len;
   stop3  = half_len  + post_offset - 1;
+
+  stop1 = trigger_ptr;
+  start1 = stop1 - pre_offset;
+  # Download and create the sample buffer in linear --1--2--3-- time
+  # Since pre-trig is circular, need to unfurl 1of2 scenarios.
+  # When pre-trig is split across the boundary, calculate the 2 chunks
+  if ( start1 < 0 ):
+    #     Pre-Trig Circular Buffer   Post-Trig Linear Buffer
+    #   [--2--               --1--][----------3--------------]
+    start2 = 0;
+    stop2  = trigger_ptr;
+    start1 = half_len-1 - pre_offset + stop2;
+    stop1  = half_len-1;
+  else:
+    #     Pre-Trig Circular Buffer   Post-Trig Linear Buffer
+    #   [     -------1-------     ][----------3--------------]
+    start2 = None;
+    stop2  = None;
+
+  if ( start2 != None ):
+    print("%d : %d-%d : %d-%d" % (trigger_ptr,start1,stop1,start2,stop2 ));
+  else:
+    print("%d : %d-%d          " % ( trigger_ptr,start1, stop1  ));
 
   len1 = stop1-start1+1;
   self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , start1 );# 
@@ -6245,20 +6295,6 @@ def sump_dump_deep_ram( self, rd_page = 0, rd_ptr = None ):
   self.sump.wr( self.sump.cmd_wr_ds_ram_ptr , start3 );# 
   data += self.sump.rd( self.sump.cmd_rd_ds_ram_data, num_dwords = len3 );
   return data;
-
-
-# if ( start2 != None ):
-#   print("%d - %d : %d - %d" % ( start1, stop1, start2, stop2 ));
-# else:
-#   print("%d - %d          " % ( start1, stop1                ));
-#
-# print("%d - %d          " % ( start3, stop3                ));
-# print("sump_dump_deep_ram()");
-# print(" ram_len = %d " % ram_len );
-# print(" rd_ptr  = %d " % rd_ptr  );
-# print( len( data ) );
-# for each in data[0:10]:
-#   print("%08x" % each );
 
 
 ########################################################
@@ -7036,7 +7072,14 @@ def init_globals( self ):
                file_load_list,
                ["VCD_Save","Save_VCD_Full","Save_VCD_Cursors","Save_VCD_Deep"],
                vcd_load_list,
-
+               ["Deep_Sump",
+                   "Save_VCD_01:01",
+                   "Save_VCD_01:05",
+                   "Save_VCD_05:01",
+                   "Save_VCD_05:05",
+                   "Save_VCD_05:50",
+                   "Save_VCD_50:05",
+                   "Save_VCD_50:50", ],
 #              ["Fonts","Font_Larger","Font_Smaller"],
 #              ["Misc","Font_Larger","Font_Smaller",
 #              "BD_SHELL","Manual"],
