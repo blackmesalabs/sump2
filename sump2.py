@@ -154,6 +154,8 @@
 # 2018.08.22 khubbard   rewrote sump_dump_deep_ram() to fix unfurling bug.
 # 2018.08.22 khubbard   Line 5600, zero out hidden signals after capture. 
 # 2018.08.24 khubbard   DeepSump menu change for partial downloads.       
+# 2018.08.31 khubbard   DeepSump improvements. Auto call GTKwave etc.     
+# 2018.08.31 khubbard   Line 310, stop downloading unknown RAM on bringup.
 #
 # Note: VV tags every place sig.values were converted from "1" to True 
 #
@@ -175,7 +177,7 @@ import locale;
 
 class main(object):
  def __init__(self):
-  self.vers = "2018.08.24";
+  self.vers = "2018.08.31";
   print("Welcome to SUMP2 " + self.vers + " by BlackMesaLabs");
   self.mode_cli = True;
 
@@ -305,8 +307,8 @@ class main(object):
       draw_header( self, ( "load_format() "+ file_name ) );# Pi
       print( "load_format() ", file_name );
       load_format( self, file_name ); 
-      trig_i = sump_dump_data(self);
-      self.trig_i = trig_i;
+#     trig_i = sump_dump_data(self);
+#     self.trig_i = trig_i;
       sump_vars_to_signal_attribs( self );# Populates things like trigger attr
 
 #   if os.path.exists( file_name ):
@@ -1471,6 +1473,7 @@ def init_manual( self ):
   a+=[" sump_rle_autocull       : If 1, remove any RLE dead time at front   "];
   a+=["                           or end of RLE acquisition samples.        "];
   a+=[" deep_sump_auto_vcd      : If 1, call save_vcd_deep automatically.   "];
+  a+=[" deep_sump_vcd_viewer    : Path to a VCD viewer like GTKwave.exe     "];
   a+=[" deep_sump_pre_trig_percent  : 1-100. Percentage of RAM to download. "];
   a+=[" deep_sump_post_trig_percent : 1-100. Percentage of RAM to download. "];
   a+=[" deep_sump_user_ctrl         : 32bit ds_user_ctrl field              "];
@@ -1693,6 +1696,7 @@ def init_vars( self, file_ini ):
   vars["sump_data_enable"      ] = "00000000";
   vars["sump_watchdog_time"    ] = "00001000";
   vars["deep_sump_auto_vcd"    ]   = "0";
+  vars["deep_sump_vcd_viewer"  ]   = "D:\gtkwave\bin\gtkwave.exe";
   vars["deep_sump_pre_trig_percent" ]   = "100";
   vars["deep_sump_post_trig_percent" ]   = "100";
   vars["deep_sump_user_ctrl"     ] = "00000000";
@@ -2373,7 +2377,8 @@ def proc_cmd( self, cmd, parms ):
          cmd == "save_vcd_05:50"   or 
          cmd == "save_vcd_50:05"   or 
          cmd == "save_vcd_50:50"  ): 
-    if   ( cmd == "save_vcd_01:01" ): pre_trig = 2;   post_trig = 2;
+#   if   ( cmd == "save_vcd_01:01" ): pre_trig = 2;   post_trig = 2;
+    if   ( cmd == "save_vcd_01:01" ): pre_trig = 1;   post_trig = 1;
     elif ( cmd == "save_vcd_01:05" ): pre_trig = 2;   post_trig = 10;
     elif ( cmd == "save_vcd_05:01" ): pre_trig = 10;  post_trig = 2;
     elif ( cmd == "save_vcd_05:05" ): pre_trig = 10;  post_trig = 10;
@@ -2401,6 +2406,17 @@ def proc_cmd( self, cmd, parms ):
         print( "save_vcd_deep() Complete " + filename_vcd );
         from shutil import copyfile;
         copyfile( filename_vcd, "deep_sump.vcd" );
+
+        import os.path, subprocess, platform;
+        vcd_viewer = self.vars['deep_sump_vcd_viewer'];
+        if ( os.path.isfile( vcd_viewer ) ):
+          if ( platform.system() == "Windows" ):
+            subprocess.call('%s %s' % (vcd_viewer, filename_vcd), shell=True);
+            self.pygame.event.clear();# Required for Windows
+          else:
+            print("TODO: Insert Linux call to GTKwave here");
+        else:
+          print("ERROR: Invalid path " + vcd_viewer );
       else:
         print("ERROR: DeepSUMP incomplete capture : ERR %01x"%(ds_status>>28));
         if ( ds_status & self.sump.ds_status_overrun_err != 0x00000000 ):
@@ -7070,7 +7086,7 @@ def init_globals( self ):
                ["File_Save","Save_PNG","Save_JPG","Save_BMP",
                 "Save_TXT","Save_Rename"],
                file_load_list,
-               ["VCD_Save","Save_VCD_Full","Save_VCD_Cursors","Save_VCD_Deep"],
+               ["VCD_Save","Save_VCD_Full","Save_VCD_Cursors"],
                vcd_load_list,
                ["Deep_Sump",
                    "Save_VCD_01:01",
